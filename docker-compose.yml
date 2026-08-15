@@ -1,0 +1,71 @@
+# Local dev stack: Postgres+TimescaleDB, the public (OTLP ingest) server,
+# and the metrics (query) server, run as three independent containers from
+# one built image — matching the "two independent servers" architecture
+# even in dev. See docs/running-locally.md for the full walkthrough.
+#
+# Run from the repo root: docker compose up
+
+services:
+  postgres:
+    image: timescale/timescaledb-ha:pg16
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: argvio
+    ports:
+      - "5432:5432"
+    volumes:
+      - argvio-pgdata:/home/postgres/pgdata/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    build:
+      context: .
+      dockerfile: .docker/Dockerfile-build
+    entrypoint: ["/app/admin"]
+    command: ["migrate", "up"]
+    environment:
+      ARGVIO_STORAGE_DSN: postgres://postgres:postgres@postgres:5432/argvio?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  public:
+    build:
+      context: .
+      dockerfile: .docker/Dockerfile-build
+    entrypoint: ["/app/public"]
+    ports:
+      - "4317:4317" # OTLP/gRPC
+      - "4318:4318" # OTLP/HTTP
+    environment:
+      ARGVIO_STORAGE__DSN: postgres://postgres:postgres@postgres:5432/argvio?sslmode=disable
+      ARGVIO_PUBLIC__GRPC_LISTEN_ADDR: 0.0.0.0:4317
+      ARGVIO_PUBLIC__HTTP_LISTEN_ADDR: 0.0.0.0:4318
+      ARGVIO_PUBLIC__ALLOWLIST_SCHEMA_PATH: /app/schema/allowlist/v1.yaml
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  metrics:
+    build:
+      context: .
+      dockerfile: .docker/Dockerfile-build
+    entrypoint: ["/app/metrics"]
+    ports:
+      - "8080:8080"
+    environment:
+      ARGVIO_STORAGE__DSN: postgres://postgres:postgres@postgres:5432/argvio?sslmode=disable
+      ARGVIO_METRICS__LISTEN_ADDR: 0.0.0.0:8080
+      ARGVIO_METRICS__JWT_SIGNING_KEY: dev-only-signing-key-change-me
+      ARGVIO_METRICS__DEV_MODE: "true"
+    command: ["-openapi-spec=/app/openapi/openapi.yaml"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  argvio-pgdata:

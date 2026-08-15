@@ -1,0 +1,439 @@
+openapi: 3.1.0
+info:
+  title: Argvio Metrics API
+  version: "1.0.0"
+  description: >
+    Read-oriented REST API for querying ingested CLI telemetry: raw span
+    listing plus four pre-aggregated dashboard queries backed by
+    TimescaleDB continuous aggregates. Every request is scoped to exactly
+    one tenant, derived from the caller's auth token — there is no way to
+    request another tenant's data (see the `security` section and
+    docs/architecture.md).
+
+    This spec covers the `metrics` server only. The `public` server is a
+    spec-compliant OTLP receiver (gRPC + HTTP), documented by reference to
+    the OpenTelemetry Protocol specification in docs/architecture.md rather
+    than duplicated here.
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://metrics.argvio.internal
+    description: Production (internal/trusted-tenant network only)
+  - url: http://localhost:8080
+    description: Local development
+
+security:
+  - BearerJWT: []
+  - BearerAPIKey: []
+
+paths:
+  /healthz:
+    get:
+      summary: Liveness check
+      operationId: healthz
+      security: []
+      responses:
+        "200":
+          description: Server is up.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+
+  /v1/traces:
+    get:
+      summary: List raw spans
+      description: >
+        Drill-down query behind the aggregate endpoints below. Paginated,
+        newest first. For dashboard-scale time series, use
+        /v1/metrics/latency, /v1/metrics/error-rate, or
+        /v1/metrics/command-frequency instead of paging through this.
+      operationId: listTraces
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/Command"
+        - $ref: "#/components/parameters/ExitCode"
+        - $ref: "#/components/parameters/IsCI"
+        - $ref: "#/components/parameters/AttrFilter"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Matching spans.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TraceSummary"
+              example:
+                data:
+                  - time: "2026-08-12T14:23:49Z"
+                    trace_id: "ed6651f361204ea8a9b1e0f9cf092661"
+                    span_id: "0102030405060708"
+                    span_name: "cli.command.deploy"
+                    duration_ms: 142.5
+                    status_code: 1
+                    command_name: "deploy"
+                    exit_code: 0
+                    cli_version: "1.4.2"
+                    os: "linux"
+                    arch: "amd64"
+                    is_ci: false
+                    consent_tier: "basic"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/metrics/latency:
+    get:
+      summary: Command latency percentiles (p50/p95/p99), time-bucketed
+      operationId: latencyPercentiles
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/Command"
+        - $ref: "#/components/parameters/IsCI"
+        - $ref: "#/components/parameters/Bucket"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Per-bucket, per-command percentile latencies.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/LatencyPoint"
+              example:
+                data:
+                  - bucket: "2026-08-12T00:00:00Z"
+                    command_name: "deploy"
+                    invocation_count: 483
+                    p50_ms: 118.2
+                    p95_ms: 340.7
+                    p99_ms: 812.4
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/metrics/error-rate:
+    get:
+      summary: Error rate over time, per command
+      operationId: errorRateSeries
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/Command"
+        - $ref: "#/components/parameters/IsCI"
+        - $ref: "#/components/parameters/Bucket"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Per-bucket, per-command invocation/error counts and rate.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ErrorRatePoint"
+              example:
+                data:
+                  - bucket: "2026-08-12T00:00:00Z"
+                    command_name: "deploy"
+                    invocation_count: 483
+                    error_count: 12
+                    error_rate: 0.0248
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/metrics/command-frequency:
+    get:
+      summary: Command invocation frequency histogram, time-bucketed
+      operationId: commandFrequency
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/Command"
+        - $ref: "#/components/parameters/IsCI"
+        - $ref: "#/components/parameters/Bucket"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Per-bucket, per-command invocation counts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/FrequencyPoint"
+              example:
+                data:
+                  - bucket: "2026-08-12T00:00:00Z"
+                    command_name: "deploy"
+                    invocation_count: 483
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/metrics/cohorts:
+    get:
+      summary: Session/activation cohort counts, time-bucketed (daily)
+      operationId: sessionCohorts
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/IsCI"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Per-bucket session counts, broken down by cli_version/os.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CohortPoint"
+              example:
+                data:
+                  - bucket: "2026-08-12T00:00:00Z"
+                    cli_version: "1.4.2"
+                    os: "linux"
+                    session_count: 217
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+  securitySchemes:
+    BearerJWT:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Dashboard-user session token. Must carry a `tenant_id` claim (the
+        UUID of the tenant this session is scoped to) and a standard `exp`.
+        Signed HS256; the server pins the algorithm explicitly and rejects
+        any other `alg`, including `none`.
+    BearerAPIKey:
+      type: http
+      scheme: bearer
+      description: >
+        A scoped API key issued with scope=metrics_query (see
+        `argvio-admin apikey create --scope metrics_query`). Distinct from
+        the public server's ingest keys (scope=public_ingest) — an ingest
+        key is rejected here and vice versa.
+
+  parameters:
+    From:
+      name: from
+      in: query
+      required: true
+      description: Start of the query window, inclusive. RFC3339.
+      schema: { type: string, format: date-time }
+    To:
+      name: to
+      in: query
+      required: false
+      description: End of the query window, exclusive. RFC3339. Defaults to now.
+      schema: { type: string, format: date-time }
+    CLIVersion:
+      name: cli_version
+      in: query
+      required: false
+      schema: { type: string }
+    OS:
+      name: os
+      in: query
+      required: false
+      schema: { type: string, enum: [linux, darwin, windows, other] }
+    Arch:
+      name: arch
+      in: query
+      required: false
+      schema: { type: string, enum: ["amd64", "arm64", "386", "arm", "other"] }
+    Command:
+      name: command
+      in: query
+      required: false
+      description: Exact command_name match.
+      schema: { type: string }
+    ExitCode:
+      name: exit_code
+      in: query
+      required: false
+      schema: { type: integer, format: int32 }
+    IsCI:
+      name: is_ci
+      in: query
+      required: false
+      schema: { type: boolean }
+    Bucket:
+      name: bucket
+      in: query
+      required: false
+      description: Time-bucket granularity for aggregate endpoints.
+      schema: { type: string, enum: [hour, day], default: hour }
+    AttrFilter:
+      name: attr.*
+      in: query
+      required: false
+      description: >
+        Exact-match filter against a record-level attribute, e.g.
+        `attr.cli.ci_provider=github_actions`. Repeatable with different
+        keys (ANDed together). Values are always bound as query parameters
+        server-side — never string-concatenated into SQL — so arbitrary
+        attribute values cannot be used for injection.
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Page size. Clamped server-side to MetricsConfig.max_result_page_size.
+      schema: { type: integer, minimum: 1, default: 100 }
+    Offset:
+      name: offset
+      in: query
+      required: false
+      schema: { type: integer, minimum: 0, default: 0 }
+
+  schemas:
+    TraceSummary:
+      type: object
+      properties:
+        time: { type: string, format: date-time }
+        trace_id: { type: string }
+        span_id: { type: string }
+        span_name: { type: string }
+        duration_ms: { type: number }
+        status_code: { type: integer, description: "OTLP Status.code: 0 unset, 1 ok, 2 error" }
+        status_message: { type: string, nullable: true }
+        command_name: { type: string, nullable: true }
+        exit_code: { type: integer, nullable: true }
+        cli_version: { type: string, nullable: true }
+        os: { type: string, nullable: true }
+        arch: { type: string, nullable: true }
+        is_ci: { type: boolean, nullable: true }
+        consent_tier: { type: string, enum: [anonymous, basic, full, optin_plus] }
+      required: [time, trace_id, span_id, span_name, duration_ms, status_code, consent_tier]
+
+    LatencyPoint:
+      type: object
+      properties:
+        bucket: { type: string, format: date-time }
+        command_name: { type: string }
+        invocation_count: { type: integer }
+        p50_ms: { type: number, nullable: true }
+        p95_ms: { type: number, nullable: true }
+        p99_ms: { type: number, nullable: true }
+      required: [bucket, command_name, invocation_count]
+
+    ErrorRatePoint:
+      type: object
+      properties:
+        bucket: { type: string, format: date-time }
+        command_name: { type: string }
+        invocation_count: { type: integer }
+        error_count: { type: integer }
+        error_rate: { type: number, description: "error_count / invocation_count" }
+      required: [bucket, command_name, invocation_count, error_count, error_rate]
+
+    FrequencyPoint:
+      type: object
+      properties:
+        bucket: { type: string, format: date-time }
+        command_name: { type: string }
+        invocation_count: { type: integer }
+      required: [bucket, command_name, invocation_count]
+
+    CohortPoint:
+      type: object
+      properties:
+        bucket: { type: string, format: date-time }
+        cli_version: { type: string, nullable: true }
+        os: { type: string, nullable: true }
+        session_count: { type: integer }
+      required: [bucket, session_count]
+
+    Error:
+      type: object
+      properties:
+        error: { type: string, description: "Short machine-readable error code." }
+        message: { type: string, description: "Human-readable detail." }
+      required: [error, message]
+
+  responses:
+    BadRequest:
+      description: >
+        Invalid filter (malformed timestamp, unknown bucket value, time
+        range wider than max_time_range_span, etc).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: invalid_request, message: "requested time range 8760h0m0s exceeds max_time_range_span 2160h0m0s" }
+    Unauthorized:
+      description: >
+        Missing, invalid, expired, or tampered token; or a token whose
+        tenant_id claim does not resolve to an active tenant.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: unauthorized, message: "invalid or expired token" }
+    InternalError:
+      description: Unexpected server-side failure. Detail is intentionally generic — see server logs.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: internal_error, message: "query failed" }

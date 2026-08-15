@@ -1,0 +1,376 @@
+# Argvio CLI telemetry taxonomy — versioned allowlist + consent-tier schema.
+#
+# This file is the single source of truth for "what data we accept" (Layer 2
+# semantic validation in the `public` ingest server) and "what data belongs
+# at which consent tier" (tier enforcement, also in `public`).
+#
+# It is loaded at startup by internal/allowlist and hot-reloadable (SIGHUP or
+# fsnotify — see internal/allowlist/loader.go). Adding a new supported
+# metric/span/log event is a pure data change to this file; no Go code in the
+# ingest path needs to change. See docs/allowlist.md for a worked example.
+#
+# schema_version is independent of the file name/path convention (v1.yaml) —
+# the path lets us keep old versions around during a migration, the field
+# lets code assert it loaded what it expected.
+
+schema_version: 1
+
+# Signal types the `public` server accepts at all (Layer 1 structural check).
+# Anything else (e.g. a future OTLP "profiles" signal) is rejected outright,
+# not silently dropped.
+supported_signal_types: [metrics, logs, traces]
+
+# Standard OTel resource attributes that are always permitted at `anonymous`
+# tier regardless of the per-event allowlists below — these come from the
+# OTel SDK itself, not CLI-specific instrumentation, and carry no PII.
+# Anything not listed here AND not in a per-event allowed_attributes list is
+# rejected/stripped per the normal Layer 2 rules.
+standard_resource_attributes:
+  - service.name
+  - service.version
+  - service.namespace
+  - telemetry.sdk.name
+  - telemetry.sdk.language
+  - telemetry.sdk.version
+
+# ---------------------------------------------------------------------------
+# Consent tiers
+# ---------------------------------------------------------------------------
+# Declared per-record via the resource/span/log attribute `cli.analytics.tier`.
+# Ordered lowest -> highest sensitivity. A tenant's `tier_ceiling` (tenant_config
+# table) is one of these names; a record's declared tier must be <= ceiling.
+consent_tiers:
+  - name: anonymous
+    rank: 0
+    description: >
+      No identifiers beyond what the API key itself implies. Aggregate-only
+      shape: command name, exit code, duration, environment class.
+  - name: basic
+    rank: 1
+    description: >
+      Adds an opaque, non-identity-linked session/install UUID and flag
+      names (not values). Still no error content, args, or paths.
+  - name: full
+    rank: 2
+    description: >
+      Adds error/crash diagnostics (message + stack trace) and the full
+      allowlisted attribute set for allowed events.
+  - name: optin_plus
+    rank: 3
+    description: >
+      Adds fields explicitly marked sensitive: true below (raw argv, env
+      vars, hostname, username, raw absolute paths). Requires the tenant
+      ceiling to be optin_plus AND the record to declare optin_plus.
+
+# ---------------------------------------------------------------------------
+# Shared attribute definitions
+# ---------------------------------------------------------------------------
+# Referenced by key from the allowed_attributes lists below, so a given
+# attribute's type/tier/sensitivity is defined once even if many event types
+# share it (e.g. cli.command.name appears on spans, metrics, and logs).
+attributes:
+  cli.analytics.tier:
+    type: string
+    enum: [anonymous, basic, full, optin_plus]
+    min_tier: anonymous
+    sensitive: false
+    description: Declares the consent tier this record was captured under.
+
+  cli.command.name:
+    type: string
+    max_length: 128
+    min_tier: anonymous
+    sensitive: false
+    description: Allowlisted top-level command/subcommand path, e.g. "deploy.push".
+
+  cli.command.exit_code:
+    type: int
+    min_tier: anonymous
+    sensitive: false
+    description: Process exit code.
+
+  cli.command.duration_ms:
+    type: int
+    min_tier: anonymous
+    sensitive: false
+    description: Wall-clock duration of the command invocation.
+
+  cli.version:
+    type: string
+    max_length: 32
+    min_tier: anonymous
+    sensitive: false
+
+  cli.os:
+    type: string
+    enum: [linux, darwin, windows, other]
+    min_tier: anonymous
+    sensitive: false
+
+  cli.arch:
+    type: string
+    enum: [amd64, arm64, "386", arm, other]
+    min_tier: anonymous
+    sensitive: false
+
+  cli.is_ci:
+    type: bool
+    min_tier: anonymous
+    sensitive: false
+
+  cli.ci_provider:
+    type: string
+    max_length: 64
+    min_tier: anonymous
+    sensitive: false
+    description: e.g. github_actions, gitlab_ci, circleci — free text but bounded.
+
+  cli.session_id:
+    type: string
+    max_length: 64
+    min_tier: basic
+    sensitive: false
+    description: Opaque random UUID generated client-side per session. Must not be identity-derived.
+
+  cli.install_id:
+    type: string
+    max_length: 64
+    min_tier: basic
+    sensitive: false
+    description: Opaque random UUID generated at install time.
+
+  cli.flag.names:
+    type: string_array
+    max_items: 64
+    max_length: 64
+    min_tier: basic
+    sensitive: false
+    description: Names of flags passed, values excluded.
+
+  cli.shell:
+    type: string
+    max_length: 32
+    min_tier: basic
+    sensitive: false
+
+  cli.terminal:
+    type: string
+    max_length: 32
+    min_tier: basic
+    sensitive: false
+
+  cli.error.type:
+    type: string
+    max_length: 128
+    min_tier: full
+    sensitive: false
+    description: Error class/category name, e.g. "NetworkTimeoutError".
+
+  cli.error.message:
+    type: string
+    max_length: 2048
+    min_tier: full
+    sensitive: false
+    description: Human-readable error message. Tenant SDKs are responsible for not embedding secrets.
+
+  cli.error.stacktrace:
+    type: string
+    max_length: 16384
+    min_tier: full
+    sensitive: false
+
+  cli.help.flag:
+    type: string
+    max_length: 64
+    min_tier: anonymous
+    sensitive: false
+    description: Which help flag/command triggered a help-usage event.
+
+  cli.install.method:
+    type: string
+    max_length: 32
+    min_tier: anonymous
+    sensitive: false
+    description: e.g. brew, npm, curl, binary.
+
+  cli.activation.feature:
+    type: string
+    max_length: 64
+    min_tier: basic
+    sensitive: false
+
+  cli.args.raw:
+    type: string
+    max_length: 4096
+    min_tier: optin_plus
+    sensitive: true
+    description: Full raw argv. May contain paths, secrets, PII — opt-in only.
+
+  cli.env.vars:
+    type: string_array
+    max_items: 64
+    max_length: 256
+    min_tier: optin_plus
+    sensitive: true
+    description: Environment variable names and/or values. Opt-in only.
+
+  cli.host.name:
+    type: string
+    max_length: 256
+    min_tier: optin_plus
+    sensitive: true
+
+  cli.user.name:
+    type: string
+    max_length: 128
+    min_tier: optin_plus
+    sensitive: true
+
+  cli.path.raw:
+    type: string
+    max_length: 1024
+    min_tier: optin_plus
+    sensitive: true
+    description: Raw absolute filesystem path.
+
+# ---------------------------------------------------------------------------
+# Layer 2: signal-type allowlists
+# ---------------------------------------------------------------------------
+
+metrics:
+  - name: cli.command.invocations
+    type: sum
+    unit: "1"
+    monotonic: true
+    allowed_attributes:
+      - cli.command.name
+      - cli.command.exit_code
+      - cli.version
+      - cli.os
+      - cli.arch
+      - cli.is_ci
+      - cli.ci_provider
+
+  - name: cli.command.duration
+    type: histogram
+    unit: ms
+    allowed_attributes:
+      - cli.command.name
+      - cli.command.exit_code
+      - cli.version
+      - cli.os
+      - cli.arch
+      - cli.is_ci
+
+  - name: cli.errors
+    type: sum
+    unit: "1"
+    monotonic: true
+    allowed_attributes:
+      - cli.command.name
+      - cli.error.type
+      - cli.version
+      - cli.os
+      - cli.arch
+
+  - name: cli.sessions.active
+    type: gauge
+    unit: "1"
+    allowed_attributes:
+      - cli.version
+      - cli.os
+      - cli.is_ci
+
+spans:
+  # Pattern-matched by prefix; "cli.command.*" matches cli.command.deploy,
+  # cli.command.push, etc. See internal/allowlist for match semantics.
+  - name_pattern: "cli.command.*"
+    allowed_attributes:
+      - cli.command.name
+      - cli.command.exit_code
+      - cli.command.duration_ms
+      - cli.version
+      - cli.os
+      - cli.arch
+      - cli.is_ci
+      - cli.ci_provider
+      - cli.flag.names
+      - cli.args.raw
+
+  - name_pattern: "cli.subcommand.*"
+    allowed_attributes:
+      - cli.command.name
+      - cli.command.exit_code
+      - cli.version
+      - cli.os
+      - cli.arch
+
+logs:
+  - event_name: cli.command.invoked
+    allowed_attributes:
+      - cli.command.name
+      - cli.version
+      - cli.os
+      - cli.arch
+      - cli.is_ci
+      - cli.ci_provider
+      - cli.session_id
+      - cli.install_id
+      - cli.flag.names
+
+  - event_name: cli.command.completed
+    allowed_attributes:
+      - cli.command.name
+      - cli.command.exit_code
+      - cli.command.duration_ms
+      - cli.version
+      - cli.os
+      - cli.arch
+
+  - event_name: cli.error.raised
+    allowed_attributes:
+      - cli.command.name
+      - cli.error.type
+      - cli.error.message
+      - cli.error.stacktrace
+      - cli.version
+      - cli.os
+      - cli.arch
+
+  - event_name: cli.help.viewed
+    allowed_attributes:
+      - cli.help.flag
+      - cli.command.name
+      - cli.version
+
+  - event_name: cli.install.completed
+    allowed_attributes:
+      - cli.install.method
+      - cli.version
+      - cli.os
+      - cli.arch
+
+  - event_name: cli.session.started
+    allowed_attributes:
+      - cli.session_id
+      - cli.install_id
+      - cli.version
+      - cli.os
+      - cli.arch
+      - cli.is_ci
+      - cli.shell
+      - cli.terminal
+
+  - event_name: cli.feature.activated
+    allowed_attributes:
+      - cli.activation.feature
+      - cli.command.name
+      - cli.version
+
+  - event_name: cli.diagnostic.env
+    allowed_attributes:
+      - cli.env.vars
+      - cli.host.name
+      - cli.user.name
+      - cli.path.raw
+      - cli.version

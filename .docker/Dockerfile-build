@@ -1,0 +1,26 @@
+# Multi-stage build producing three binaries: public, metrics, admin.
+# docker-compose (docker-compose.yml, run from the repo root) runs each
+# from this one image with a different command — see docs/running-locally.md.
+
+FROM golang:1.26-bookworm AS builder
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 go build -o /out/public ./cmd/public && \
+    CGO_ENABLED=0 go build -o /out/metrics ./cmd/metrics && \
+    CGO_ENABLED=0 go build -o /out/admin ./cmd/admin
+
+FROM gcr.io/distroless/base-debian12
+WORKDIR /app
+
+COPY --from=builder /out/public /out/metrics /out/admin ./
+# Runtime-read files: the allowlist schema (hot-reloadable, so it needs to
+# be a real file on disk, not baked into the Go binary) and the OpenAPI
+# spec (served by cmd/metrics when dev_mode is enabled).
+COPY schema/ ./schema/
+COPY openapi/ ./openapi/
+
+ENTRYPOINT ["/app/public"]

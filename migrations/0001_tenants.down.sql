@@ -1,0 +1,3 @@
+DROP TABLE IF EXISTS api_keys;
+DROP TABLE IF EXISTS tenant_config;
+DROP TABLE IF EXISTS tenants;

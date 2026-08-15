@@ -1,0 +1,17 @@
+# Used by goreleaser only: copies prebuilt binaries (see .goreleaser.yaml)
+# rather than building them. For local dev, use .docker/Dockerfile-build
+# instead.
+FROM gcr.io/distroless/base-debian12
+WORKDIR /app
+
+ARG TARGETOS
+ARG TARGETARCH
+ARG TARGETVARIANT
+
+COPY ${TARGETOS}/${TARGETARCH}${TARGETVARIANT:+/$TARGETVARIANT}/public ./
+COPY ${TARGETOS}/${TARGETARCH}${TARGETVARIANT:+/$TARGETVARIANT}/metrics ./
+COPY ${TARGETOS}/${TARGETARCH}${TARGETVARIANT:+/$TARGETVARIANT}/admin ./
+COPY schema/ ./schema/
+COPY openapi/ ./openapi/
+
+ENTRYPOINT ["/app/public"]
