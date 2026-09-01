@@ -1,17 +1,17 @@
 # Used by goreleaser only: copies prebuilt binaries (see .goreleaser.yaml)
 # rather than building them. For local dev, use .docker/Dockerfile-build
 # instead.
-FROM gcr.io/distroless/base-debian12
+FROM gcr.io/distroless/base-debian13:nonroot
 WORKDIR /app
 
 ARG TARGETOS
 ARG TARGETARCH
 ARG TARGETVARIANT
 
-COPY ${TARGETOS}/${TARGETARCH}${TARGETVARIANT:+/$TARGETVARIANT}/public ./
-COPY ${TARGETOS}/${TARGETARCH}${TARGETVARIANT:+/$TARGETVARIANT}/metrics ./
-COPY ${TARGETOS}/${TARGETARCH}${TARGETVARIANT:+/$TARGETVARIANT}/admin ./
-COPY schema/ ./schema/
-COPY openapi/ ./openapi/
+COPY --chown=nonroot:nonroot ${TARGETOS}/${TARGETARCH}${TARGETVARIANT:+/$TARGETVARIANT}/public ./
+COPY --chown=nonroot:nonroot ${TARGETOS}/${TARGETARCH}${TARGETVARIANT:+/$TARGETVARIANT}/metrics ./
+COPY --chown=nonroot:nonroot ${TARGETOS}/${TARGETARCH}${TARGETVARIANT:+/$TARGETVARIANT}/admin ./
+COPY --chown=nonroot:nonroot schema/ ./schema/
+COPY --chown=nonroot:nonroot openapi/ ./openapi/
 
 ENTRYPOINT ["/app/public"]

@@ -2,7 +2,7 @@
 # docker-compose (docker-compose.yml, run from the repo root) runs each
 # from this one image with a different command — see docs/running-locally.md.
 
-FROM golang:1.26-bookworm AS builder
+FROM golang:1.27-trixie AS builder
 WORKDIR /src
 
 COPY go.mod go.sum ./
@@ -13,14 +13,14 @@ RUN CGO_ENABLED=0 go build -o /out/public ./cmd/public && \
     CGO_ENABLED=0 go build -o /out/metrics ./cmd/metrics && \
     CGO_ENABLED=0 go build -o /out/admin ./cmd/admin
 
-FROM gcr.io/distroless/base-debian12
+FROM gcr.io/distroless/base-debian13:nonroot
 WORKDIR /app
 
-COPY --from=builder /out/public /out/metrics /out/admin ./
+COPY --from=builder --chown=nonroot:nonroot /out/public /out/metrics /out/admin ./
 # Runtime-read files: the allowlist schema (hot-reloadable, so it needs to
 # be a real file on disk, not baked into the Go binary) and the OpenAPI
 # spec (served by cmd/metrics when dev_mode is enabled).
-COPY schema/ ./schema/
-COPY openapi/ ./openapi/
+COPY --chown=nonroot:nonroot schema/ ./schema/
+COPY --chown=nonroot:nonroot openapi/ ./openapi/
 
 ENTRYPOINT ["/app/public"]
