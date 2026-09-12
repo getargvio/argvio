@@ -46,6 +46,7 @@ jobs:
     permissions:
       contents: write
       packages: write
+      id-token: write
 
     steps:
       - uses: actions/checkout@v7
@@ -57,6 +58,8 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+
+      - uses: sigstore/cosign-installer@v3
 
       - uses: docker/setup-qemu-action@v4
 

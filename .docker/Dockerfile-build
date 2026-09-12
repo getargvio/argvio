@@ -13,7 +13,7 @@ RUN CGO_ENABLED=0 go build -o /out/public ./cmd/public && \
     CGO_ENABLED=0 go build -o /out/metrics ./cmd/metrics && \
     CGO_ENABLED=0 go build -o /out/admin ./cmd/admin
 
-FROM gcr.io/distroless/base-debian13:nonroot
+FROM gcr.io/distroless/static-debian13:nonroot
 WORKDIR /app
 
 COPY --from=builder --chown=nonroot:nonroot /out/public /out/metrics /out/admin ./
