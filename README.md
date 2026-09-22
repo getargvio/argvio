@@ -25,6 +25,8 @@ frontend, no CLI-side SDK.
   generated from the config structs.
 - [`docs/running-locally.md`](docs/running-locally.md) — docker compose,
   migrations, seeding a tenant, sending a test OTLP payload.
+- [`docs/otel-collector.md`](docs/otel-collector.md) — fan out an OTel
+  Collector to Argvio and another backend at the same time.
 - [`openapi/openapi.yaml`](openapi/openapi.yaml) — the `metrics` server's
   REST API, endpoint by endpoint.
 
