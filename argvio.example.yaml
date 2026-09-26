@@ -1,0 +1,41 @@
+# Example argvio configuration file — one document covering every
+# subcommand that reads config (`serve public`, `serve metrics`, `policies
+# apply`), same as ory/hydra's single hydra.yml. Every key here has a
+# built-in default (see docs/configuration.md); only storage.dsn and
+# metrics.jwt_signing_key have no safe default and must be set somewhere
+# (here, a YAML file, or the matching ARGVIO_* env var).
+#
+# Usage:
+#   argvio --config ./argvio.example.yaml serve public
+#   argvio --config ./argvio.example.yaml serve metrics
+#   argvio -c base.yaml -c prod.yaml serve public   # layered: prod.yaml wins
+#
+# Precedence (lowest to highest): built-in defaults -> this file (later
+# --config files override earlier ones) -> ARGVIO_* environment variables.
+
+log_level: info
+
+storage:
+  dsn: "postgres://postgres:postgres@localhost:5432/argvio?sslmode=disable"
+  public_pool:
+    max_conns: 50
+    min_conns: 5
+  metrics_pool:
+    max_conns: 20
+    min_conns: 2
+  statement_timeout: 30s
+
+public:
+  grpc_listen_addr: "0.0.0.0:4317"
+  http_listen_addr: "0.0.0.0:4318"
+  allowlist_schema_path: "schema/allowlist/v1.yaml"
+  allowlist_hot_reload: true
+  rate_limit_requests_per_second: 200
+  rate_limit_bytes_per_second: 5000000
+  rate_limit_burst: 400
+
+metrics:
+  listen_addr: "0.0.0.0:8080"
+  auth_mode: jwt # jwt | api_key
+  jwt_signing_key: "change-me-in-production"
+  dev_mode: false

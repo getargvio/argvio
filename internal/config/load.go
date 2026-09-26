@@ -31,18 +31,22 @@ func durationDecodeHook() mapstructure.DecodeHookFunc {
 	return mapstructure.StringToTimeDurationHookFunc()
 }
 
-// loadInto layers defaults -> optional YAML file at path -> environment
-// variables (highest precedence) into dst. path may be empty to skip the
-// file layer (defaults + env only — useful for tests/containers that are
-// fully env-configured).
-func loadInto(path string, defaults map[string]any, dst any) error {
+// loadInto layers defaults -> zero or more YAML files, in the order given
+// (each one merges over the last) -> environment variables (highest
+// precedence) into dst. Mirrors ory/hydra's repeatable `-c/--config` flag:
+// `argvio serve public -c base.yaml -c prod.yaml` layers prod.yaml over
+// base.yaml.
+func loadInto(paths []string, defaults map[string]any, dst any) error {
 	k := koanf.New(".")
 
 	if err := k.Load(confmap.Provider(defaults, "."), nil); err != nil {
 		return fmt.Errorf("config: load defaults: %w", err)
 	}
 
-	if path != "" {
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
 		if err := k.Load(file.Provider(path), yaml.Parser()); err != nil {
 			return fmt.Errorf("config: load file %s: %w", path, err)
 		}
@@ -67,38 +71,24 @@ func loadInto(path string, defaults map[string]any, dst any) error {
 	return nil
 }
 
-// LoadPublic loads the public server's config. path may be "" to rely on
-// defaults + env only.
-func LoadPublic(path string) (*PublicRoot, error) {
-	var c PublicRoot
-	if err := loadInto(path, publicDefaults(), &c); err != nil {
-		return nil, err
-	}
-	if err := c.Validate(); err != nil {
-		return nil, err
-	}
-	return &c, nil
-}
-
-// LoadMetrics loads the metrics server's config. path may be "" to rely on
-// defaults + env only.
-func LoadMetrics(path string) (*MetricsRoot, error) {
-	var c MetricsRoot
-	if err := loadInto(path, metricsDefaults(), &c); err != nil {
-		return nil, err
-	}
-	if err := c.Validate(); err != nil {
+// Load reads the single argvio configuration document — one set of layered
+// YAML files covering `public:`, `metrics:`, and `storage:` sections, the
+// same file(s) regardless of which subcommand is running — plus env var
+// overrides. paths may be empty to rely on defaults + env only. Callers
+// validate only the sections their subcommand needs: see
+// Root.ValidatePublic, Root.ValidateMetrics, Root.ValidateStorage.
+func Load(paths []string) (*Root, error) {
+	var c Root
+	if err := loadInto(paths, defaults(), &c); err != nil {
 		return nil, err
 	}
 	return &c, nil
 }
 
-// PublicDefaults and MetricsDefaults expose the layered-config defaults
-// (see loadInto) for tooling — specifically docs/configuration.md's
-// generator (tools/gendocs), so the documented defaults can never drift
-// from what LoadPublic/LoadMetrics actually use.
-func PublicDefaults() map[string]any  { return publicDefaults() }
-func MetricsDefaults() map[string]any { return metricsDefaults() }
+// Defaults exposes the layered-config defaults (see loadInto) for tooling —
+// specifically docs/configuration.md's generator (tools/gendocs), so the
+// documented defaults can never drift from what Load actually uses.
+func Defaults() map[string]any { return defaults() }
 
 func joinErrors(msgs []string) error {
 	if len(msgs) == 0 {

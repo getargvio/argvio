@@ -6,9 +6,9 @@ import (
 	"time"
 )
 
-func TestLoadPublic_Defaults(t *testing.T) {
+func TestLoad_Defaults(t *testing.T) {
 	t.Setenv("ARGVIO_STORAGE__DSN", "postgres://user:pass@localhost:5432/argvio")
-	c, err := LoadPublic("")
+	c, err := Load(nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -20,12 +20,12 @@ func TestLoadPublic_Defaults(t *testing.T) {
 	}
 }
 
-func TestLoadPublic_EnvOverride(t *testing.T) {
+func TestLoad_EnvOverride(t *testing.T) {
 	t.Setenv("ARGVIO_STORAGE__DSN", "postgres://user:pass@localhost:5432/argvio")
 	t.Setenv("ARGVIO_PUBLIC__GRPC_LISTEN_ADDR", "127.0.0.1:9999")
 	t.Setenv("ARGVIO_STORAGE__PUBLIC_POOL__MAX_CONNS", "77")
 
-	c, err := LoadPublic("")
+	c, err := Load(nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -40,20 +40,32 @@ func TestLoadPublic_EnvOverride(t *testing.T) {
 	}
 }
 
-func TestLoadPublic_MissingDSNFailsValidation(t *testing.T) {
-	if _, err := LoadPublic(""); err == nil {
+func TestValidatePublic_MissingDSNFails(t *testing.T) {
+	c, err := Load(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := c.ValidatePublic(); err == nil {
 		t.Fatalf("expected validation error for missing storage.dsn")
 	}
 }
 
-func TestLoadMetrics_DefaultAuthModeRequiresSigningKey(t *testing.T) {
+func TestValidateMetrics_DefaultAuthModeRequiresSigningKey(t *testing.T) {
 	t.Setenv("ARGVIO_STORAGE__DSN", "postgres://user:pass@localhost:5432/argvio")
-	if _, err := LoadMetrics(""); err == nil {
+	c, err := Load(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := c.ValidateMetrics(); err == nil {
 		t.Fatalf("expected validation error: default auth_mode=jwt requires jwt_signing_key")
 	}
+
 	t.Setenv("ARGVIO_METRICS__JWT_SIGNING_KEY", "test-secret")
-	c, err := LoadMetrics("")
+	c, err = Load(nil)
 	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := c.ValidateMetrics(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if c.Metrics.AuthMode != AuthModeJWT {
@@ -61,14 +73,14 @@ func TestLoadMetrics_DefaultAuthModeRequiresSigningKey(t *testing.T) {
 	}
 }
 
-func TestLoadPublic_FromYAMLFile(t *testing.T) {
+func TestLoad_FromYAMLFile(t *testing.T) {
 	dir := t.TempDir()
-	path := dir + "/public.yaml"
+	path := dir + "/argvio.yaml"
 	yamlContent := "public:\n  grpc_listen_addr: \"0.0.0.0:14317\"\nstorage:\n  dsn: \"postgres://x/y\"\n"
 	if err := os.WriteFile(path, []byte(yamlContent), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	c, err := LoadPublic(path)
+	c, err := Load([]string{path})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -77,5 +89,28 @@ func TestLoadPublic_FromYAMLFile(t *testing.T) {
 	}
 	if c.Storage.DSN != "postgres://x/y" {
 		t.Errorf("dsn = %q", c.Storage.DSN)
+	}
+}
+
+func TestLoad_LayersMultipleFiles(t *testing.T) {
+	dir := t.TempDir()
+	base := dir + "/base.yaml"
+	override := dir + "/override.yaml"
+	if err := os.WriteFile(base, []byte("public:\n  grpc_listen_addr: \"0.0.0.0:1\"\nmetrics:\n  listen_addr: \"0.0.0.0:2\"\nstorage:\n  dsn: \"postgres://x/y\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(override, []byte("public:\n  grpc_listen_addr: \"0.0.0.0:3\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := Load([]string{base, override})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c.Public.GRPCListenAddr != "0.0.0.0:3" {
+		t.Errorf("grpc addr = %q, want override.yaml to win", c.Public.GRPCListenAddr)
+	}
+	if c.Metrics.ListenAddr != "0.0.0.0:2" {
+		t.Errorf("metrics listen addr = %q, want base.yaml value to survive", c.Metrics.ListenAddr)
 	}
 }

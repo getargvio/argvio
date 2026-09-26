@@ -19,6 +19,11 @@ the operator CLI are all subcommands of it:
   operator CLI: migrations, tenant/API-key seeding, Timescale policy
   reconciliation, per-tenant retention sweeps.
 
+Every subcommand above shares one configuration document (`--config`/`-c`,
+repeatable) covering `public:`, `metrics:`, and `storage:` sections
+together — see [`argvio.example.yaml`](argvio.example.yaml), following
+ory/hydra's single `hydra.yml`.
+
 ## Docs
 
 - [`docs/architecture.md`](docs/architecture.md) — the two-server split,

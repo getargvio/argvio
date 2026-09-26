@@ -26,18 +26,21 @@ import (
 // docs/architecture.md for why it runs as a separate process from `serve
 // public`.
 func newServeMetricsCommand() *cobra.Command {
-	var configPath, openAPIPath string
+	var openAPIPath string
 
 	cmd := &cobra.Command{
 		Use:   "metrics",
 		Short: "Run the metrics query API",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.LoadMetrics(configPath)
+			root, err := config.Load(configPaths)
 			if err != nil {
 				return fmt.Errorf("config error:\n%w", err)
 			}
-			log := newLogger(cfg.LogLevel)
-			if err := runMetrics(cfg, openAPIPath, log); err != nil {
+			if err := root.ValidateMetrics(); err != nil {
+				return fmt.Errorf("config error:\n%w", err)
+			}
+			log := newLogger(root.LogLevel)
+			if err := runMetrics(root, openAPIPath, log); err != nil {
 				log.Error("metrics server exited with error", "error", err)
 				return err
 			}
@@ -45,12 +48,11 @@ func newServeMetricsCommand() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&configPath, "config", "", "path to config YAML (optional; defaults + env still apply)")
 	cmd.Flags().StringVar(&openAPIPath, "openapi-spec", "openapi/openapi.yaml", "path to the OpenAPI spec served at /openapi.yaml when dev_mode is enabled")
 	return cmd
 }
 
-func runMetrics(cfg *config.MetricsRoot, openAPIPath string, log *slog.Logger) error {
+func runMetrics(cfg *config.Root, openAPIPath string, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

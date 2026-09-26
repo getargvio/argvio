@@ -46,6 +46,24 @@ export ARGVIO_METRICS__DEV_MODE=true
 go run ./cmd/argvio serve metrics
 ```
 
+## Option C: a config file instead of env vars
+
+Every `argvio` subcommand that reads config accepts a repeatable
+`--config`/`-c` flag pointing at one YAML document covering `storage:`,
+`public:`, and `metrics:` sections together — see
+[`argvio.example.yaml`](../argvio.example.yaml). Env vars still override
+whatever the file sets, so it's safe to keep secrets like `storage.dsn` out
+of the file and inject them via env in production:
+
+```sh
+go run ./cmd/argvio --config ./argvio.example.yaml migrate up
+go run ./cmd/argvio --config ./argvio.example.yaml serve public
+go run ./cmd/argvio --config ./argvio.example.yaml serve metrics
+```
+
+Passing `-c` more than once layers files in the order given (later files
+override earlier ones): `argvio -c base.yaml -c prod.yaml serve public`.
+
 Full config reference (every key, env var, default): docs/configuration.md.
 
 ## Seed a tenant + API key
