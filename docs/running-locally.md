@@ -118,11 +118,14 @@ hourly — see docs/schema.md). For quick local testing, without waiting:
 ```sql
 CALL refresh_continuous_aggregate('cagg_command_stats_hourly', NULL, NULL);
 CALL refresh_continuous_aggregate('cagg_command_stats_daily', NULL, NULL);
+CALL refresh_continuous_aggregate('cagg_exit_codes_hourly', NULL, NULL);
+CALL refresh_continuous_aggregate('cagg_session_activity_daily', NULL, NULL);
 ```
 
-`/v1/metrics/latency`, `/v1/metrics/error-rate`, and
-`/v1/metrics/command-frequency` read from these views — they'll return
-empty until at least one refresh has run.
+Every `/v1/metrics/*` aggregate endpoint except `/v1/traces` reads from one
+of these four views (see docs/schema.md) — they'll return empty until at
+least one refresh has run. `/v1/metrics/retention` is the one exception:
+it reads raw `logs` directly, so it needs no refresh, only ingested data.
 
 ## API docs (dev only)
 

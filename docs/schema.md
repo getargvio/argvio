@@ -83,9 +83,23 @@ hourly:
 
 | View | Source | Grain | Backs |
 |---|---|---|---|
-| `cagg_command_stats_hourly` | `traces` (`cli.command.*` / `cli.subcommand.*` spans) | tenant × command × cli_version × os × arch × is_ci × hour | `LatencyPercentiles`, `ErrorRateSeries`, `CommandFrequency` (bucket=hour) |
-| `cagg_command_stats_daily` | `cagg_command_stats_hourly` (hierarchical) | same, × day | same three, bucket=day — avoids rescanning raw `traces` for wide-range dashboard queries |
-| `cagg_session_activity_daily` | `logs` (`cli.session.started`) | tenant × cli_version × os × is_ci × day | `SessionCohort` |
+| `cagg_command_stats_hourly` | `traces` (`cli.command.*` / `cli.subcommand.*` spans) | tenant × command × cli_version × os × arch × is_ci × hour | `LatencyPercentiles`, `ErrorRateSeries`, `CommandFrequency`, `CISplit` (bucket=hour) |
+| `cagg_command_stats_daily` | `cagg_command_stats_hourly` (hierarchical) | same, × day | same four, bucket=day/week/month — avoids rescanning raw `traces` for wide-range dashboard queries; week/month re-bucket this at query time (`internal/storage/query.go`'s `rebucket`) rather than materializing yet another rollup |
+| `cagg_exit_codes_hourly` (`migrations/0005`) | `traces` (same spans as above) | tenant × command × cli_version × os × arch × is_ci × exit_code × hour | `ExitCodeDistribution` — the command-stats rollups above only carry an errored/not-errored count, not a per-exit-code breakdown, hence a separate rollup rather than adding a column to `cagg_command_stats_*` |
+| `cagg_session_activity_daily` | `logs` (`cli.session.started`) | tenant × cli_version × os × arch × is_ci × day | `SessionCohort`, `ActiveInstalls` (bucket=day/week/month) |
+
+`cagg_session_activity_daily` also carries `install_hll`, a HyperLogLog
+sketch (`timescaledb_toolkit`'s `hyperloglog(8192, ...)`) of
+`log_attributes ->> 'cli.install_id'` per row — `hyperloglog()` ignores
+NULLs, so anonymous-tier sessions (no `cli.install_id`) count toward
+`session_count` but not toward `ActiveInstalls`. Sketches union correctly
+across days via `rollup()`, so a week/month distinct-install count is exact
+in aggregate structure (approximate only in the ~1% HLL sense) rather than
+a sum of daily counts, which would double-count an install active on
+several days. `migrations/0005` rebuilt this view from scratch (rather than
+just adding a column) because a continuous aggregate's `GROUP BY`/
+aggregate list can't be altered in place — see that migration's comments
+for the backfill step required after deploying it.
 
 Percentiles use TimescaleDB Toolkit's `percentile_agg`/`approx_percentile`
 (uddsketch-backed), not `percentile_cont` — continuous aggregates can only
@@ -98,7 +112,16 @@ whatever dimensions a query collapses (e.g. filtering by `os` but not
 `internal/storage/query.go`'s `commandStats` is the one query all three of
 `LatencyPercentiles`/`ErrorRateSeries`/`CommandFrequency` share — same
 `GROUP BY`, different projection — rather than three near-duplicate SQL
-strings.
+strings. `CISplit` reads the same rollup, grouped by `is_ci` instead of
+`command_name`.
+
+`Retention` (cohort-by-first-seen retention grid) is the one dashboard
+aggregate that reads raw `logs` rather than a continuous aggregate: an
+install's first-seen bucket is a per-install minimum over all history, which
+no time-bucketed rollup can answer without re-deriving it per query anyway.
+It's therefore bounded by raw log retention (an install older than that
+looks "new" the next time it's seen), not by any cagg's longer retention
+window.
 
 ## Compression + retention policies (`migrations/0004`)
 
@@ -107,7 +130,7 @@ strings.
 | `traces` | 7d | 30d |
 | `logs` | 7d | 90d |
 | `metrics` | 30d | ~400d |
-| continuous aggregates | — | 90d (hourly) / 730d (daily rollups) |
+| continuous aggregates | — | 90d (hourly rollups, both `cagg_command_stats_hourly` and `cagg_exit_codes_hourly`) / 730d (daily rollups) |
 
 Applied via migration at deploy time, and re-appliable idempotently via
 `argvio-admin policies apply` (`internal/storage.ApplyRetentionAndCompressionPolicies`)

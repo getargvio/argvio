@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -173,6 +174,68 @@ func TestMetricsAPI_EndToEnd_Live(t *testing.T) {
 		}
 		if totalInv != 20 || totalErr != 5 {
 			t.Fatalf("invocations=%d errors=%d, want 20/5", totalInv, totalErr)
+		}
+	})
+
+	get := func(t *testing.T, path string) *http.Response {
+		t.Helper()
+		req, _ := http.NewRequest("GET", ts.URL+path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	t.Run("multi-value command filter ORs values", func(t *testing.T) {
+		resp := get(t, fmt.Sprintf("/v1/traces?from=%s&command=deploy,nonexistent&command=other", url.QueryEscape(fromParam)))
+		defer resp.Body.Close()
+		var body struct {
+			Data []storage.TraceSummary `json:"data"`
+		}
+		json.NewDecoder(resp.Body).Decode(&body)
+		if len(body.Data) != 20 {
+			t.Fatalf("got %d traces, want 20", len(body.Data))
+		}
+	})
+
+	t.Run("bucket values are validated per endpoint", func(t *testing.T) {
+		cases := []struct {
+			path   string
+			status int
+		}{
+			{"/v1/metrics/command-frequency?bucket=week", http.StatusOK},
+			{"/v1/metrics/exit-codes?bucket=month", http.StatusOK},
+			{"/v1/metrics/ci-split?bucket=hour", http.StatusOK},
+			{"/v1/metrics/cohorts?bucket=week", http.StatusOK},
+			{"/v1/metrics/active-installs?bucket=month", http.StatusOK},
+			{"/v1/metrics/retention?bucket=day", http.StatusOK},
+			{"/v1/metrics/cohorts?bucket=hour", http.StatusBadRequest},
+			{"/v1/metrics/retention?bucket=hour", http.StatusBadRequest},
+			{"/v1/metrics/latency?bucket=year", http.StatusBadRequest},
+		}
+		for _, c := range cases {
+			resp := get(t, c.path+"&from="+url.QueryEscape(fromParam))
+			resp.Body.Close()
+			if resp.StatusCode != c.status {
+				t.Errorf("%s: status = %d, want %d", c.path, resp.StatusCode, c.status)
+			}
+		}
+	})
+
+	t.Run("dimensions endpoint needs no time range", func(t *testing.T) {
+		resp := get(t, "/v1/meta/dimensions")
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200", resp.StatusCode)
+		}
+		var body struct {
+			Data storage.Dimensions `json:"data"`
+		}
+		json.NewDecoder(resp.Body).Decode(&body)
+		if !slices.Equal(body.Data.CommandNames, []string{"deploy"}) {
+			t.Fatalf("command_name = %v, want [deploy]", body.Data.CommandNames)
 		}
 	})
 

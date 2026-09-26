@@ -6,6 +6,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+
+	"github.com/getargvio/argvio/internal/storage"
 )
 
 func (s *Server) router() http.Handler {
@@ -26,10 +28,15 @@ func (s *Server) router() http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(s.authMiddleware)
 		r.Get("/v1/traces", s.handleListTraces)
-		r.Get("/v1/metrics/latency", s.handleLatencyPercentiles)
-		r.Get("/v1/metrics/error-rate", s.handleErrorRate)
-		r.Get("/v1/metrics/command-frequency", s.handleCommandFrequency)
-		r.Get("/v1/metrics/cohorts", s.handleCohorts)
+		r.Get("/v1/meta/dimensions", s.handleDimensions)
+		r.Get("/v1/metrics/latency", serveBucketed(s, "latency percentiles", storage.BucketHour, anyBucket, s.QB.LatencyPercentiles))
+		r.Get("/v1/metrics/error-rate", serveBucketed(s, "error rate", storage.BucketHour, anyBucket, s.QB.ErrorRateSeries))
+		r.Get("/v1/metrics/command-frequency", serveBucketed(s, "command frequency", storage.BucketHour, anyBucket, s.QB.CommandFrequency))
+		r.Get("/v1/metrics/exit-codes", serveBucketed(s, "exit code distribution", storage.BucketHour, anyBucket, s.QB.ExitCodeDistribution))
+		r.Get("/v1/metrics/ci-split", serveBucketed(s, "ci split", storage.BucketHour, anyBucket, s.QB.CISplit))
+		r.Get("/v1/metrics/cohorts", serveBucketed(s, "cohorts", storage.BucketDay, dailyBucket, s.QB.SessionCohort))
+		r.Get("/v1/metrics/active-installs", serveBucketed(s, "active installs", storage.BucketDay, dailyBucket, s.QB.ActiveInstalls))
+		r.Get("/v1/metrics/retention", serveBucketed(s, "retention", storage.BucketWeek, dailyBucket, s.QB.Retention))
 	})
 
 	// OpenAPI spec + viewer: dev-only, unauthenticated (per the task spec —

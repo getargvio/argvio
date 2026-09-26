@@ -3,6 +3,7 @@ package metricsapi
 import (
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -30,10 +31,10 @@ func (s *Server) parseFilters(r *http.Request) (storage.Filters, error) {
 	}
 	f.Time = storage.TimeRange{From: from, To: to}
 
-	f.CLIVersion = strParam(q, "cli_version")
-	f.OS = strParam(q, "os")
-	f.Arch = strParam(q, "arch")
-	f.CommandName = strParam(q, "command")
+	f.CLIVersions = multiParam(q, "cli_version")
+	f.OSes = multiParam(q, "os")
+	f.Arches = multiParam(q, "arch")
+	f.CommandNames = multiParam(q, "command")
 	f.IsCI = boolParam(q, "is_ci")
 
 	if v := q.Get("exit_code"); v != "" {
@@ -100,12 +101,20 @@ func first(q map[string][]string, key string) string {
 	return ""
 }
 
-func strParam(q map[string][]string, key string) *string {
-	v := first(q, key)
-	if v == "" {
-		return nil
+// multiParam collects every value of a multi-value filter param, accepting
+// both repeated keys (`os=linux&os=darwin`) and comma-separated values
+// (`os=linux,darwin`), or any mix. Empty entries are dropped, so `os=` is
+// the same as omitting the param.
+func multiParam(q map[string][]string, key string) []string {
+	var out []string
+	for _, raw := range q[key] {
+		for _, v := range strings.Split(raw, ",") {
+			if v = strings.TrimSpace(v); v != "" {
+				out = append(out, v)
+			}
+		}
 	}
-	return &v
+	return out
 }
 
 func boolParam(q map[string][]string, key string) *bool {
@@ -117,14 +126,20 @@ func boolParam(q map[string][]string, key string) *bool {
 	return &b
 }
 
-func parseBucket(r *http.Request) (storage.Bucket, error) {
-	v := r.URL.Query().Get("bucket")
-	switch v {
-	case "", "hour":
-		return storage.BucketHour, nil
-	case "day":
-		return storage.BucketDay, nil
-	default:
-		return "", fmt.Errorf("bucket must be 'hour' or 'day'")
+// parseBucket reads the `bucket` param, defaulting to def when absent and
+// rejecting anything not in allowed — endpoints backed by a daily rollup
+// can't serve hour, for instance.
+func parseBucket(r *http.Request, def storage.Bucket, allowed ...storage.Bucket) (storage.Bucket, error) {
+	v := storage.Bucket(r.URL.Query().Get("bucket"))
+	if v == "" {
+		return def, nil
 	}
+	if slices.Contains(allowed, v) {
+		return v, nil
+	}
+	names := make([]string, len(allowed))
+	for i, b := range allowed {
+		names[i] = "'" + string(b) + "'"
+	}
+	return "", fmt.Errorf("bucket must be one of %s", strings.Join(names, ", "))
 }

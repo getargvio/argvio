@@ -4,8 +4,9 @@ info:
   version: "1.0.0"
   description: >
     Read-oriented REST API for querying ingested CLI telemetry: raw span
-    listing plus four pre-aggregated dashboard queries backed by
-    TimescaleDB continuous aggregates. Every request is scoped to exactly
+    listing, a distinct-dimension-values lookup, and pre-aggregated
+    dashboard queries (mostly backed by TimescaleDB continuous
+    aggregates). Every request is scoped to exactly
     one tenant, derived from the caller's auth token — there is no way to
     request another tenant's data (see the `security` section and
     docs/architecture.md).
@@ -92,6 +93,36 @@ paths:
                     consent_tier: "basic"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+
+  /v1/meta/dimensions:
+    get:
+      summary: Distinct filter values the tenant has data for
+      description: >
+        Source for dashboard filter option lists. Takes no time range —
+        lists every value present in the tenant's daily rollups. Each list
+        is sorted and capped at max_result_page_size values.
+      operationId: listDimensions
+      responses:
+        "200":
+          description: Distinct values per filter dimension.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Dimensions"
+              example:
+                data:
+                  cli_version: ["1.4.1", "1.4.2"]
+                  os: ["darwin", "linux"]
+                  arch: ["amd64", "arm64"]
+                  command_name: ["deploy", "status"]
         "401":
           $ref: "#/components/responses/Unauthorized"
         "500":
@@ -221,19 +252,21 @@ paths:
 
   /v1/metrics/cohorts:
     get:
-      summary: Session/activation cohort counts, time-bucketed (daily)
+      summary: Session/activation cohort counts, time-bucketed (day or coarser)
       operationId: sessionCohorts
       parameters:
         - $ref: "#/components/parameters/From"
         - $ref: "#/components/parameters/To"
         - $ref: "#/components/parameters/CLIVersion"
         - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
         - $ref: "#/components/parameters/IsCI"
+        - $ref: "#/components/parameters/DailyBucket"
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Offset"
       responses:
         "200":
-          description: Per-bucket session counts, broken down by cli_version/os.
+          description: Per-bucket session counts, broken down by cli_version/os/arch.
           content:
             application/json:
               schema:
@@ -248,7 +281,186 @@ paths:
                   - bucket: "2026-08-12T00:00:00Z"
                     cli_version: "1.4.2"
                     os: "linux"
+                    arch: "amd64"
                     session_count: 217
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/metrics/exit-codes:
+    get:
+      summary: Invocation counts per exit code, per command, time-bucketed
+      description: >
+        Error-type breakdown: the command-stats endpoints only expose an
+        errored/not-errored count, this one splits it by exit_code.
+      operationId: exitCodeDistribution
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/Command"
+        - $ref: "#/components/parameters/ExitCode"
+        - $ref: "#/components/parameters/IsCI"
+        - $ref: "#/components/parameters/Bucket"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Per-bucket, per-command, per-exit-code invocation counts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ExitCodePoint"
+              example:
+                data:
+                  - bucket: "2026-08-12T00:00:00Z"
+                    command_name: "deploy"
+                    exit_code: 2
+                    invocation_count: 9
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/metrics/ci-split:
+    get:
+      summary: Command invocations split by CI vs. interactive, time-bucketed
+      description: >
+        One grouped-by-is_ci response instead of querying
+        /v1/metrics/command-frequency once per is_ci value.
+      operationId: ciSplit
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/Command"
+        - $ref: "#/components/parameters/IsCI"
+        - $ref: "#/components/parameters/Bucket"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Per-bucket invocation counts, one row per is_ci value.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CISplitPoint"
+              example:
+                data:
+                  - bucket: "2026-08-12T00:00:00Z"
+                    is_ci: true
+                    invocation_count: 1204
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/metrics/active-installs:
+    get:
+      summary: Active installs (DAU/WAU/MAU), time-bucketed
+      description: >
+        Approximate distinct cli.install_id count per bucket: bucket=day is
+        DAU, week WAU, month MAU. Per-day HyperLogLog sketches are unioned,
+        so an install active on several days of a week counts once. Only
+        sessions recorded at basic consent tier or above carry an install
+        id, so anonymous-tier usage is not counted here (it still counts in
+        /v1/metrics/cohorts session totals).
+      operationId: activeInstalls
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/IsCI"
+        - $ref: "#/components/parameters/DailyBucket"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Per-bucket approximate active-install count.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ActiveInstallsPoint"
+              example:
+                data:
+                  - bucket: "2026-08-10T00:00:00Z"
+                    active_installs: 1832
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/metrics/retention:
+    get:
+      summary: Install retention by cohort
+      description: >
+        Cohort grid: installs are grouped by the bucket (default week) they
+        were first seen in, for cohorts starting within [from, to), and
+        counted again in each later bucket they started a session in, up
+        to `to`. First-seen is computed from raw session logs, so it is
+        bounded by raw log retention, and only basic-tier-or-above sessions
+        (which carry cli.install_id) are included. Dimension filters
+        restrict which sessions count — e.g. cli_version gives "first seen
+        on this version" cohorts.
+      operationId: retentionByCohort
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/IsCI"
+        - $ref: "#/components/parameters/RetentionBucket"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: One row per (cohort, period) cell, ordered by cohort then period.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RetentionPoint"
+              example:
+                data:
+                  - cohort: "2026-08-03T00:00:00Z"
+                    period: 1
+                    cohort_size: 240
+                    retained_installs: 131
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -289,27 +501,42 @@ components:
       required: false
       description: End of the query window, exclusive. RFC3339. Defaults to now.
       schema: { type: string, format: date-time }
+    # cli_version / os / arch / command are multi-value: repeat the key
+    # (`os=linux&os=darwin`) or comma-separate (`os=linux,darwin`), or mix
+    # both. Values within one param are ORed; distinct params are ANDed
+    # (same as attr.*).
     CLIVersion:
       name: cli_version
       in: query
       required: false
-      schema: { type: string }
+      description: Exact cli_version match; multi-value (OR).
+      style: form
+      explode: true
+      schema: { type: array, items: { type: string } }
     OS:
       name: os
       in: query
       required: false
-      schema: { type: string, enum: [linux, darwin, windows, other] }
+      description: Multi-value (OR).
+      style: form
+      explode: true
+      schema: { type: array, items: { type: string, enum: [linux, darwin, windows, other] } }
     Arch:
       name: arch
       in: query
       required: false
-      schema: { type: string, enum: ["amd64", "arm64", "386", "arm", "other"] }
+      description: Multi-value (OR).
+      style: form
+      explode: true
+      schema: { type: array, items: { type: string, enum: ["amd64", "arm64", "386", "arm", "other"] } }
     Command:
       name: command
       in: query
       required: false
-      description: Exact command_name match.
-      schema: { type: string }
+      description: Exact command_name match; multi-value (OR).
+      style: form
+      explode: true
+      schema: { type: array, items: { type: string } }
     ExitCode:
       name: exit_code
       in: query
@@ -324,8 +551,25 @@ components:
       name: bucket
       in: query
       required: false
-      description: Time-bucket granularity for aggregate endpoints.
-      schema: { type: string, enum: [hour, day], default: hour }
+      description: >
+        Time-bucket granularity. hour/day read the matching rollup
+        directly; week (ISO, Monday start) and month are rolled up from
+        daily data at query time. All boundaries are UTC.
+      schema: { type: string, enum: [hour, day, week, month], default: hour }
+    DailyBucket:
+      name: bucket
+      in: query
+      required: false
+      description: >
+        Time-bucket granularity for endpoints backed by daily session data
+        (no hour). week starts Monday; all boundaries are UTC.
+      schema: { type: string, enum: [day, week, month], default: day }
+    RetentionBucket:
+      name: bucket
+      in: query
+      required: false
+      description: Cohort and period granularity. week starts Monday; all boundaries are UTC.
+      schema: { type: string, enum: [day, week, month], default: week }
     AttrFilter:
       name: attr.*
       in: query
@@ -404,8 +648,51 @@ components:
         bucket: { type: string, format: date-time }
         cli_version: { type: string, nullable: true }
         os: { type: string, nullable: true }
+        arch: { type: string, nullable: true }
         session_count: { type: integer }
       required: [bucket, session_count]
+
+    ExitCodePoint:
+      type: object
+      properties:
+        bucket: { type: string, format: date-time }
+        command_name: { type: string }
+        exit_code: { type: integer, nullable: true, description: "null when the client didn't report one" }
+        invocation_count: { type: integer }
+      required: [bucket, command_name, exit_code, invocation_count]
+
+    CISplitPoint:
+      type: object
+      properties:
+        bucket: { type: string, format: date-time }
+        is_ci: { type: boolean, nullable: true, description: "null when the client didn't report cli.is_ci" }
+        invocation_count: { type: integer }
+      required: [bucket, is_ci, invocation_count]
+
+    ActiveInstallsPoint:
+      type: object
+      properties:
+        bucket: { type: string, format: date-time }
+        active_installs: { type: integer, description: "Approximate distinct cli.install_id count (HyperLogLog, ~1% error)." }
+      required: [bucket, active_installs]
+
+    RetentionPoint:
+      type: object
+      properties:
+        cohort: { type: string, format: date-time, description: "Start of the bucket the cohort's installs were first seen in." }
+        period: { type: integer, minimum: 0, description: "Buckets since the cohort bucket; 0 is the cohort bucket itself." }
+        cohort_size: { type: integer, description: "Installs first seen in the cohort bucket." }
+        retained_installs: { type: integer, description: "Of those, installs with a session in this period." }
+      required: [cohort, period, cohort_size, retained_installs]
+
+    Dimensions:
+      type: object
+      properties:
+        cli_version: { type: array, items: { type: string } }
+        os: { type: array, items: { type: string } }
+        arch: { type: array, items: { type: string } }
+        command_name: { type: array, items: { type: string } }
+      required: [cli_version, os, arch, command_name]
 
     Error:
       type: object
