@@ -1,13 +1,8 @@
-// Command public runs the OTLP ingest server: gRPC on
-// PublicConfig.GRPCListenAddr, OTLP/HTTP on PublicConfig.HTTPListenAddr.
-// This is the internet-facing edge — see docs/architecture.md for why it
-// is a separate binary/process from cmd/metrics.
-package main
+package cli
 
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"log/slog"
 	"net"
@@ -18,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 
 	"github.com/getargvio/argvio/internal/allowlist"
@@ -28,26 +24,35 @@ import (
 	"github.com/getargvio/argvio/internal/tenant"
 )
 
-func main() {
-	configPath := flag.String("config", "", "path to config YAML (optional; defaults + env still apply)")
-	flag.Parse()
+// newServePublicCommand runs the OTLP ingest server: gRPC on
+// PublicConfig.GRPCListenAddr, OTLP/HTTP on PublicConfig.HTTPListenAddr.
+// This is the internet-facing edge — see docs/architecture.md for why it
+// runs as a separate process from `serve metrics`.
+func newServePublicCommand() *cobra.Command {
+	var configPath string
 
-	cfg, err := config.LoadPublic(*configPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "config error:\n%v\n", err)
-		os.Exit(1)
+	cmd := &cobra.Command{
+		Use:   "public",
+		Short: "Run the OTLP ingest server (gRPC + HTTP)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.LoadPublic(configPath)
+			if err != nil {
+				return fmt.Errorf("config error:\n%w", err)
+			}
+			log := newLogger(cfg.LogLevel)
+			if err := runPublic(cfg, log); err != nil {
+				log.Error("public server exited with error", "error", err)
+				return err
+			}
+			return nil
+		},
 	}
 
-	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: parseLevel(cfg.LogLevel)}))
-	slog.SetDefault(log)
-
-	if err := run(cfg, log); err != nil {
-		log.Error("public server exited with error", "error", err)
-		os.Exit(1)
-	}
+	cmd.Flags().StringVar(&configPath, "config", "", "path to config YAML (optional; defaults + env still apply)")
+	return cmd
 }
 
-func run(cfg *config.PublicRoot, log *slog.Logger) error {
+func runPublic(cfg *config.PublicRoot, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -148,17 +153,4 @@ func run(cfg *config.PublicRoot, log *slog.Logger) error {
 	defer cancel()
 	grpcServer.GracefulStop()
 	return httpServer.Shutdown(shutdownCtx)
-}
-
-func parseLevel(s string) slog.Level {
-	switch s {
-	case "debug":
-		return slog.LevelDebug
-	case "warn":
-		return slog.LevelWarn
-	case "error":
-		return slog.LevelError
-	default:
-		return slog.LevelInfo
-	}
 }

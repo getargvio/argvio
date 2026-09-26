@@ -125,7 +125,7 @@ logs:
 
 Save the file. If `public.allowlist_hot_reload` is true (default), the
 running server picks it up within one `fsnotify` event — no restart, no
-deploy. `argvio-admin` doesn't need to know about this either; it's purely
+deploy. `argvio` doesn't need to know about this either; it's purely
 data-driven.
 
 ## Non-standard resource attributes

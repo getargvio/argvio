@@ -114,7 +114,7 @@ func (s *Store) CreateTenant(ctx context.Context, slug, name string) (*Tenant, e
 }
 
 // UpsertConfig writes tenant_config for an existing tenant, overwriting
-// whatever was there. Used by cmd/admin and (eventually) a tenant-settings
+// whatever was there. Used by the `argvio` CLI and (eventually) a tenant-settings
 // API, not by the ingest/query hot paths.
 func (s *Store) UpsertConfig(ctx context.Context, cfg Config) error {
 	_, err := s.pool.Exec(ctx, `
@@ -145,7 +145,7 @@ ON CONFLICT (tenant_id) DO UPDATE SET
 
 // ListRetentionOverrides returns every tenant_config row that sets a
 // shorter-than-global retention window for at least one signal — the input
-// to `argvio-admin retention sweep` (internal/storage.SweepTenantRetention).
+// to `argvio retention sweep` (internal/storage.SweepTenantRetention).
 func (s *Store) ListRetentionOverrides(ctx context.Context) ([]Config, error) {
 	rows, err := s.pool.Query(ctx, `
 SELECT tenant_id, retention_traces_days, retention_logs_days, retention_metrics_days
@@ -170,7 +170,7 @@ WHERE retention_traces_days IS NOT NULL
 }
 
 // CreateAPIKey generates a new random key, stores only its hash, and
-// returns the raw key exactly once — callers (cmd/admin) must display/hand
+// returns the raw key exactly once — callers (the `argvio` CLI) must display/hand
 // it off immediately; it is never recoverable from storage afterward.
 func (s *Store) CreateAPIKey(ctx context.Context, tenantID uuid.UUID, scope string) (rawKey string, key *APIKey, err error) {
 	raw, err := generateRawKey(scope)

@@ -4,7 +4,7 @@ Generated from `internal/config`'s structs (`go run ./tools/gendocs`) — key na
 
 Layering: **defaults → YAML config file → environment variable overrides** (highest precedence wins). Env vars use prefix `ARGVIO_` and `__` as the nesting delimiter (plain `_` is legal inside a key name), e.g. `ARGVIO_STORAGE__PUBLIC_POOL__MAX_CONNS`.
 
-## `public` server (`cmd/public`)
+## `public` server (`argvio serve public`)
 
 | Key | Env var | Type | Default | Description |
 |---|---|---|---|---|
@@ -43,7 +43,7 @@ Layering: **defaults → YAML config file → environment variable overrides** (
 | `storage.metrics.compression_after` | `ARGVIO_STORAGE__METRICS__COMPRESSION_AFTER` | duration | `720h` | Global compression policy age threshold for metrics. |
 | `storage.metrics.retention_after` | `ARGVIO_STORAGE__METRICS__RETENTION_AFTER` | duration | `9600h` | Global retention policy age threshold for metrics. |
 
-## `metrics` server (`cmd/metrics`)
+## `metrics` server (`argvio serve metrics`)
 
 | Key | Env var | Type | Default | Description |
 |---|---|---|---|---|
@@ -78,11 +78,11 @@ Layering: **defaults → YAML config file → environment variable overrides** (
 
 ## Per-tenant overrides
 
-Stored in Postgres (`tenant_config` table), not static config — they change per-customer at runtime via `argvio-admin tenant config`. See docs/schema.md.
+Stored in Postgres (`tenant_config` table), not static config — they change per-customer at runtime via `argvio tenant config`. See docs/schema.md.
 
 | Column | Meaning |
 |---|---|
 | `tier_ceiling` | Max consent tier this tenant may send (anonymous/basic/full/optin_plus). |
 | `tier_enforcement_mode` | `strip` or `reject` when a record's declared tier exceeds the ceiling. |
 | `rate_limit_requests_per_sec` / `rate_limit_bytes_per_sec` / `rate_limit_burst` | Override the public server's global rate-limit defaults. NULL = use global default. |
-| `retention_traces_days` / `retention_logs_days` / `retention_metrics_days` | Shorter-than-global retention, enforced by `argvio-admin retention sweep` (see docs/schema.md). NULL = use the global Timescale retention policy. |
+| `retention_traces_days` / `retention_logs_days` / `retention_metrics_days` | Shorter-than-global retention, enforced by `argvio retention sweep` (see docs/schema.md). NULL = use the global Timescale retention policy. |

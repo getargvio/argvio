@@ -14,17 +14,19 @@ require (
 	github.com/knadh/koanf/providers/confmap v1.0.1
 	github.com/knadh/koanf/providers/env v1.1.0
 	github.com/knadh/koanf/providers/file v1.2.1
-	github.com/knadh/koanf/v2 v2.3.6
-	go.opentelemetry.io/collector/pdata v1.66.0
+	github.com/knadh/koanf/v2 v2.3.7
+	github.com/spf13/cobra v1.10.2
+	go.opentelemetry.io/collector/pdata v1.67.0
 	golang.org/x/time v0.16.0
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260911204522-f61a6ca850bd
-	google.golang.org/grpc v1.83.2
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260921155816-b14227669459
+	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
 	github.com/hashicorp/go-version v1.9.0 // indirect
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
@@ -36,7 +38,8 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/rogpeppe/go-internal v1.16.0 // indirect
-	go.opentelemetry.io/collector/featuregate v1.66.0 // indirect
+	github.com/spf13/pflag v1.0.10 // indirect
+	go.opentelemetry.io/collector/featuregate v1.67.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/net v0.59.0 // indirect

@@ -5,15 +5,19 @@ a Postgres/TimescaleDB storage layer, run as two independent server
 processes. Infrastructure only — no billing, no tenant-onboarding UI, no
 frontend, no CLI-side SDK.
 
-- **`public`** (`cmd/public`) — spec-compliant OTLP receiver (gRPC + HTTP)
+One binary, `argvio` (`cmd/argvio`), one entrypoint — the two servers and
+the operator CLI are all subcommands of it:
+
+- **`argvio serve public`** — spec-compliant OTLP receiver (gRPC + HTTP)
   for metrics, logs, traces. Internet-facing, high-volume, untrusted input.
-- **`metrics`** (`cmd/metrics`) — read-oriented REST API: filtering +
+- **`argvio serve metrics`** — read-oriented REST API: filtering +
   aggregation (percentile latencies, error rate, command frequency,
   exit-code distribution, CI-vs-interactive split, session cohorts, active
   installs, cohort retention) plus a distinct filter-values lookup, over
   ingested telemetry. Internal/trusted-tenant-facing.
-- **`admin`** (`cmd/admin`) — operator CLI: migrations, tenant/API-key
-  seeding, Timescale policy reconciliation, per-tenant retention sweeps.
+- **`argvio migrate` / `tenant` / `apikey` / `policies` / `retention`** —
+  operator CLI: migrations, tenant/API-key seeding, Timescale policy
+  reconciliation, per-tenant retention sweeps.
 
 ## Docs
 

@@ -13,12 +13,13 @@
 docker compose up --build
 ```
 
-This builds one image (`.docker/Dockerfile-build`, multi-stage: `public`/`metrics`/
-`admin` binaries) and runs four containers: `postgres`
-(`timescale/timescaledb-ha:pg16`), a one-shot `migrate` job
-(`argvio-admin migrate up`, waits for Postgres's healthcheck), then
-`public` (ports 4317 gRPC / 4318 HTTP) and `metrics` (port 8080, started
-with `dev_mode=true` so `/openapi.yaml` and `/docs` are served).
+This builds one image (`.docker/Dockerfile-build`, the single `argvio`
+binary) and runs four containers, each running `argvio` with a different
+command: `postgres` (`timescale/timescaledb-ha:pg16`), a one-shot
+`migrate` job (`argvio migrate up`, waits for Postgres's healthcheck), then
+`public` (`argvio serve public`, ports 4317 gRPC / 4318 HTTP) and `metrics`
+(`argvio serve metrics`, port 8080, started with `dev_mode=true` so
+`/openapi.yaml` and `/docs` are served).
 
 Skip to "Seed a tenant" once all four containers are up
 (`docker compose ps`).
@@ -32,17 +33,17 @@ docker run -d --name argvio-pg \
 
 export ARGVIO_STORAGE__DSN="postgres://postgres:postgres@localhost:5432/argvio?sslmode=disable"
 
-go run ./cmd/admin migrate up
+go run ./cmd/argvio migrate up
 
 # terminal 2
 export ARGVIO_STORAGE__DSN="postgres://postgres:postgres@localhost:5432/argvio?sslmode=disable"
-go run ./cmd/public
+go run ./cmd/argvio serve public
 
 # terminal 3
 export ARGVIO_STORAGE__DSN="postgres://postgres:postgres@localhost:5432/argvio?sslmode=disable"
 export ARGVIO_METRICS__JWT_SIGNING_KEY="dev-only-signing-key-change-me"
 export ARGVIO_METRICS__DEV_MODE=true
-go run ./cmd/metrics
+go run ./cmd/argvio serve metrics
 ```
 
 Full config reference (every key, env var, default): docs/configuration.md.
@@ -51,14 +52,14 @@ Full config reference (every key, env var, default): docs/configuration.md.
 
 ```sh
 export DSN="postgres://postgres:postgres@localhost:5432/argvio?sslmode=disable"
-# (docker compose: run these as `docker compose run --rm migrate /app/admin ...` instead)
+# (docker compose: run these as `docker compose run --rm migrate /app/argvio ...` instead)
 
-go run ./cmd/admin tenant create --slug acme --name "Acme Inc" --dsn "$DSN"
+go run ./cmd/argvio tenant create --slug acme --name "Acme Inc" --dsn "$DSN"
 # -> created tenant acme (id=<TENANT_ID>) ...
 
-go run ./cmd/admin tenant config --tenant-id <TENANT_ID> --tier-ceiling full --dsn "$DSN"
+go run ./cmd/argvio tenant config --tenant-id <TENANT_ID> --tier-ceiling full --dsn "$DSN"
 
-go run ./cmd/admin apikey create --tenant-id <TENANT_ID> --scope public_ingest --dsn "$DSN"
+go run ./cmd/argvio apikey create --tenant-id <TENANT_ID> --scope public_ingest --dsn "$DSN"
 # -> RAW KEY (shown once, store it now): argv_live_pub_...
 ```
 
@@ -94,7 +95,7 @@ fmt.Println("rejected_spans:", resp.PartialSuccess().RejectedSpans())
 
 ```sh
 # metrics_query-scoped API key (simpler for a curl smoke test than minting a JWT):
-go run ./cmd/admin apikey create --tenant-id <TENANT_ID> --scope metrics_query --dsn "$DSN"
+go run ./cmd/argvio apikey create --tenant-id <TENANT_ID> --scope metrics_query --dsn "$DSN"
 ```
 
 With `auth_mode=api_key` (`ARGVIO_METRICS__AUTH_MODE=api_key` — default is
