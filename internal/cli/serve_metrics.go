@@ -1,14 +1,8 @@
-// Command metrics runs the read-oriented query/analysis API: filtering and
-// aggregation over ingested telemetry, for tenant dashboards or our own
-// dashboard backend. Internal/trusted-tenant facing — see
-// docs/architecture.md for why it is a separate binary/process from
-// cmd/public.
-package main
+package cli
 
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -18,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/spf13/cobra"
 
 	"github.com/getargvio/argvio/internal/config"
 	"github.com/getargvio/argvio/internal/metricsapi"
@@ -25,27 +20,37 @@ import (
 	"github.com/getargvio/argvio/internal/tenant"
 )
 
-func main() {
-	configPath := flag.String("config", "", "path to config YAML (optional; defaults + env still apply)")
-	openAPIPath := flag.String("openapi-spec", "openapi/openapi.yaml", "path to the OpenAPI spec served at /openapi.yaml when dev_mode is enabled")
-	flag.Parse()
+// newServeMetricsCommand runs the read-oriented query/analysis API:
+// filtering and aggregation over ingested telemetry, for tenant dashboards
+// or our own dashboard backend. Internal/trusted-tenant facing — see
+// docs/architecture.md for why it runs as a separate process from `serve
+// public`.
+func newServeMetricsCommand() *cobra.Command {
+	var configPath, openAPIPath string
 
-	cfg, err := config.LoadMetrics(*configPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "config error:\n%v\n", err)
-		os.Exit(1)
+	cmd := &cobra.Command{
+		Use:   "metrics",
+		Short: "Run the metrics query API",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.LoadMetrics(configPath)
+			if err != nil {
+				return fmt.Errorf("config error:\n%w", err)
+			}
+			log := newLogger(cfg.LogLevel)
+			if err := runMetrics(cfg, openAPIPath, log); err != nil {
+				log.Error("metrics server exited with error", "error", err)
+				return err
+			}
+			return nil
+		},
 	}
 
-	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: parseLevel(cfg.LogLevel)}))
-	slog.SetDefault(log)
-
-	if err := run(cfg, *openAPIPath, log); err != nil {
-		log.Error("metrics server exited with error", "error", err)
-		os.Exit(1)
-	}
+	cmd.Flags().StringVar(&configPath, "config", "", "path to config YAML (optional; defaults + env still apply)")
+	cmd.Flags().StringVar(&openAPIPath, "openapi-spec", "openapi/openapi.yaml", "path to the OpenAPI spec served at /openapi.yaml when dev_mode is enabled")
+	return cmd
 }
 
-func run(cfg *config.MetricsRoot, openAPIPath string, log *slog.Logger) error {
+func runMetrics(cfg *config.MetricsRoot, openAPIPath string, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -98,17 +103,4 @@ func run(cfg *config.MetricsRoot, openAPIPath string, log *slog.Logger) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Metrics.ShutdownGracePeriod)
 	defer cancel()
 	return httpServer.Shutdown(shutdownCtx)
-}
-
-func parseLevel(s string) slog.Level {
-	switch s {
-	case "debug":
-		return slog.LevelDebug
-	case "warn":
-		return slog.LevelWarn
-	case "error":
-		return slog.LevelError
-	default:
-		return slog.LevelInfo
-	}
 }

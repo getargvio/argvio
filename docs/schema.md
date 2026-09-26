@@ -2,7 +2,7 @@
 
 Migrations live in `migrations/` (plain numbered `.sql` files, run via
 `golang-migrate`'s pgx driver — `internal/storage/migrate.go` embeds them
-so `argvio-admin migrate` needs no external tooling). Requires the
+so `argvio migrate` needs no external tooling). Requires the
 `timescaledb` **and** `timescaledb_toolkit` Postgres extensions — see
 "Deployment prerequisite" below.
 
@@ -15,7 +15,7 @@ Plain (non-hypertable) tables — low volume, read on every ingest request
 |---|---|
 | `tenants` | Identity: `id`, `slug`, `name`, `status` (active/suspended). |
 | `api_keys` | `key_hash` (SHA-256; the raw key is shown once at creation and never stored), `key_prefix` (for admin display), `scope` (`public_ingest` or `metrics_query` — an ingest key cannot authenticate against `metrics`, and vice versa), `revoked_at`. |
-| `tenant_config` | Runtime-tunable per-tenant overrides: `tier_ceiling`, `tier_enforcement_mode` (`strip`/`reject`), rate-limit overrides, retention-day overrides. One row per tenant, mutated via `argvio-admin tenant config`, never via static config files. |
+| `tenant_config` | Runtime-tunable per-tenant overrides: `tier_ceiling`, `tier_enforcement_mode` (`strip`/`reject`), rate-limit overrides, retention-day overrides. One row per tenant, mutated via `argvio tenant config`, never via static config files. |
 
 `traces`/`logs`/`metrics` deliberately have **no foreign key** to
 `tenants(id)` — FK validation on every row would add lock/lookup overhead
@@ -72,7 +72,7 @@ So: the global Timescale retention policy (`migrations/0004`, driven by
 `StorageConfig.Traces/Logs/Metrics.RetentionAfter`) is the safety net sized
 to the longest window any tenant needs. A tenant configured with a
 *shorter* `tenant_config.retention_*_days` gets pruned early by
-`argvio-admin retention sweep` (`internal/storage.SweepTenantRetention`), a
+`argvio retention sweep` (`internal/storage.SweepTenantRetention`), a
 plain `DELETE ... WHERE tenant_id = $1 AND time < now() - N days` — meant
 to run on a schedule (cron/systemd timer), not wired to any request path.
 
@@ -133,7 +133,7 @@ window.
 | continuous aggregates | — | 90d (hourly rollups, both `cagg_command_stats_hourly` and `cagg_exit_codes_hourly`) / 730d (daily rollups) |
 
 Applied via migration at deploy time, and re-appliable idempotently via
-`argvio-admin policies apply` (`internal/storage.ApplyRetentionAndCompressionPolicies`)
+`argvio policies apply` (`internal/storage.ApplyRetentionAndCompressionPolicies`)
 whenever `StorageConfig`'s per-signal windows change — it removes then
 re-adds each policy, since Timescale's `add_*_policy` doesn't update an
 existing job's schedule in place. `compress_segmentby` is
@@ -148,4 +148,4 @@ self-hosted with both extensions installed, or the
 `timescale/timescaledb-ha` container image (bundles both; the plain
 `timescale/timescaledb` image does not include Toolkit). `migrations/0002`
 issues `CREATE EXTENSION IF NOT EXISTS` for both, so a mismatched
-environment fails fast at `argvio-admin migrate up`, not at first query.
+environment fails fast at `argvio migrate up`, not at first query.

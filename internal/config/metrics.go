@@ -36,7 +36,7 @@ type MetricsConfig struct {
 	ShutdownGracePeriod time.Duration `koanf:"shutdown_grace_period"`
 }
 
-// MetricsRoot is the full config document for cmd/metrics.
+// MetricsRoot is the full config document for `argvio serve metrics`.
 type MetricsRoot struct {
 	LogLevel string        `koanf:"log_level"`
 	Metrics  MetricsConfig `koanf:"metrics"`

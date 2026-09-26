@@ -22,7 +22,7 @@ var sweepableTables = map[string]bool{TableTraces: true, TableLogs: true, TableM
 // window per hypertable). See docs/schema.md "Per-tenant retention".
 //
 // Intended to run periodically (e.g. daily cron calling
-// `argvio-admin retention sweep`), not on any request path.
+// `argvio retention sweep`), not on any request path.
 func SweepTenantRetention(ctx context.Context, pool *pgxpool.Pool, table string, tenantID uuid.UUID, retentionDays int) (rowsDeleted int64, err error) {
 	if !sweepableTables[table] {
 		return 0, fmt.Errorf("storage: %q is not a sweepable table", table)

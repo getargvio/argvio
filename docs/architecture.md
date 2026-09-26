@@ -1,29 +1,32 @@
 # Architecture
 
-Argvio's data component is one Go module, two independent server
-processes, sharing a Postgres/TimescaleDB storage layer:
+Argvio's data component is one Go module and one binary, `argvio`
+(`cmd/argvio`), whose subcommands run two independent server processes
+sharing a Postgres/TimescaleDB storage layer:
 
-- **`public`** (`cmd/public`) — the OTLP ingest edge. Internet-facing,
+- **`argvio serve public`** — the OTLP ingest edge. Internet-facing,
   high-volume, write-heavy, untrusted input.
-- **`metrics`** (`cmd/metrics`) — the query/analysis API. Internal/
+- **`argvio serve metrics`** — the query/analysis API. Internal/
   trusted-tenant-facing, low-volume, read-heavy.
 
 ```mermaid
 flowchart LR
-    SDK["CLI SDK / OTel exporter"] -->|"OTLP gRPC :4317\nOTLP/HTTP :4318"| PUB["public server\n(cmd/public)"]
+    SDK["CLI SDK / OTel exporter"] -->|"OTLP gRPC :4317\nOTLP/HTTP :4318"| PUB["public server\n(argvio serve public)"]
     PUB -->|"Layer 1 + Layer 2\nvalidation, consent-tier\nenforcement"| PUB
     PUB -->|"pgx CopyFrom\n(Writer pool)"| PG[("Postgres +\nTimescaleDB")]
-    MET["metrics server\n(cmd/metrics)"] -->|"QueryBuilder\n(Metrics pool)"| PG
+    MET["metrics server\n(argvio serve metrics)"] -->|"QueryBuilder\n(Metrics pool)"| PG
     DASH["Dashboard backend /\ntenant client"] -->|"JWT or scoped\nAPI key"| MET
-    ADMIN["argvio-admin CLI"] -->|"migrate / tenant /\napikey / policies /\nretention sweep"| PG
+    ADMIN["argvio CLI"] -->|"migrate / tenant /\napikey / policies /\nretention sweep"| PG
 ```
 
 ## Why two processes, not two goroutines
 
 Ingest must stay up and fast even when analytics queries are slow or the
 query server is being redeployed, and a runaway/expensive analytical query
-must never backpressure or degrade ingest. Splitting at the process level
-(not just logically within one binary) means:
+must never backpressure or degrade ingest. Both servers ship from the same
+`argvio` binary, but `serve public` and `serve metrics` still run as
+separate processes — splitting at the process level, not just logically
+within one running program, means:
 
 - **Separate failure domains.** `metrics` can crash, OOM, or be redeployed
   without `public` even noticing.
@@ -103,4 +106,5 @@ API.
 ## Non-goals (out of scope for this component)
 
 No frontend/dashboard UI, no billing/plan enforcement, no tenant
-onboarding UI (use `argvio-admin`), no CLI-side SDK/exporter code.
+onboarding UI (use the `argvio` operator CLI), no CLI-side SDK/exporter
+code.

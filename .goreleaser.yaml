@@ -20,43 +20,9 @@ metadata:
   mod_timestamp: "{{ .CommitTimestamp }}"
 
 builds:
-  - id: public
-    binary: public
-    main: ./cmd/public
-    env:
-      - CGO_ENABLED=0
-    goos:
-      - linux
-      - darwin
-    goarch:
-      - amd64
-      - arm64
-    mod_timestamp: "{{ .CommitTimestamp }}"
-    flags:
-      - -trimpath
-    ldflags:
-      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{ .CommitDate }}
-
-  - id: metrics
-    binary: metrics
-    main: ./cmd/metrics
-    env:
-      - CGO_ENABLED=0
-    goos:
-      - linux
-      - darwin
-    goarch:
-      - amd64
-      - arm64
-    mod_timestamp: "{{ .CommitTimestamp }}"
-    flags:
-      - -trimpath
-    ldflags:
-      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{ .CommitDate }}
-
-  - id: admin
-    binary: admin
-    main: ./cmd/admin
+  - id: argvio
+    binary: argvio
+    main: ./cmd/argvio
     env:
       - CGO_ENABLED=0
     goos:
@@ -134,9 +100,7 @@ release:
 dockers_v2:
   - id: argvio-ghcr
     ids:
-      - public
-      - metrics
-      - admin
+      - argvio
     dockerfile: .docker/Dockerfile-goreleaser
     images:
       - "ghcr.io/getargvio/argvio"

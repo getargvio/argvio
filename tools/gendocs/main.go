@@ -105,19 +105,19 @@ func main() {
 	fmt.Println("Layering: **defaults → YAML config file → environment variable overrides** (highest precedence wins). Env vars use prefix `ARGVIO_` and `__` as the nesting delimiter (plain `_` is legal inside a key name), e.g. `ARGVIO_STORAGE__PUBLIC_POOL__MAX_CONNS`.")
 	fmt.Println()
 
-	printSection("## `public` server (`cmd/public`)", publicRows)
-	printSection("## `metrics` server (`cmd/metrics`)", metricsRows)
+	printSection("## `public` server (`argvio serve public`)", publicRows)
+	printSection("## `metrics` server (`argvio serve metrics`)", metricsRows)
 
 	fmt.Println("## Per-tenant overrides")
 	fmt.Println()
-	fmt.Println("Stored in Postgres (`tenant_config` table), not static config — they change per-customer at runtime via `argvio-admin tenant config`. See docs/schema.md.")
+	fmt.Println("Stored in Postgres (`tenant_config` table), not static config — they change per-customer at runtime via `argvio tenant config`. See docs/schema.md.")
 	fmt.Println()
 	fmt.Println("| Column | Meaning |")
 	fmt.Println("|---|---|")
 	fmt.Println("| `tier_ceiling` | Max consent tier this tenant may send (anonymous/basic/full/optin_plus). |")
 	fmt.Println("| `tier_enforcement_mode` | `strip` or `reject` when a record's declared tier exceeds the ceiling. |")
 	fmt.Println("| `rate_limit_requests_per_sec` / `rate_limit_bytes_per_sec` / `rate_limit_burst` | Override the public server's global rate-limit defaults. NULL = use global default. |")
-	fmt.Println("| `retention_traces_days` / `retention_logs_days` / `retention_metrics_days` | Shorter-than-global retention, enforced by `argvio-admin retention sweep` (see docs/schema.md). NULL = use the global Timescale retention policy. |")
+	fmt.Println("| `retention_traces_days` / `retention_logs_days` / `retention_metrics_days` | Shorter-than-global retention, enforced by `argvio retention sweep` (see docs/schema.md). NULL = use the global Timescale retention policy. |")
 }
 
 func printSection(header string, rows []row) {

@@ -9,7 +9,7 @@ import (
 	"github.com/getargvio/argvio/internal/tenant"
 )
 
-// Server bundles everything cmd/public needs to stand up both the gRPC and
+// Server bundles everything `argvio serve public` needs to stand up both the gRPC and
 // HTTP OTLP endpoints against one shared pipeline (auth, rate limiting,
 // allowlist, storage).
 type Server struct {

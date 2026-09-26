@@ -34,7 +34,7 @@ type PublicConfig struct {
 	ShutdownGracePeriod time.Duration `koanf:"shutdown_grace_period"`
 }
 
-// PublicRoot is the full config document for cmd/public.
+// PublicRoot is the full config document for `argvio serve public`.
 type PublicRoot struct {
 	LogLevel string        `koanf:"log_level"`
 	Public   PublicConfig  `koanf:"public"`

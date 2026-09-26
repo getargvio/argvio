@@ -1,7 +1,8 @@
 # Local dev stack: Postgres+TimescaleDB, the public (OTLP ingest) server,
 # and the metrics (query) server, run as three independent containers from
 # one built image — matching the "two independent servers" architecture
-# even in dev. See docs/running-locally.md for the full walkthrough.
+# even in dev. All three run the same `argvio` binary/entrypoint, just with
+# a different command. See docs/running-locally.md for the full walkthrough.
 #
 # Run from the repo root: docker compose up
 
@@ -25,7 +26,6 @@ services:
     build:
       context: .
       dockerfile: .docker/Dockerfile-build
-    entrypoint: ["/app/admin"]
     command: ["migrate", "up"]
     environment:
       ARGVIO_STORAGE_DSN: postgres://postgres:postgres@postgres:5432/argvio?sslmode=disable
@@ -37,7 +37,7 @@ services:
     build:
       context: .
       dockerfile: .docker/Dockerfile-build
-    entrypoint: ["/app/public"]
+    command: ["serve", "public"]
     ports:
       - "4317:4317" # OTLP/gRPC
       - "4318:4318" # OTLP/HTTP
@@ -54,7 +54,7 @@ services:
     build:
       context: .
       dockerfile: .docker/Dockerfile-build
-    entrypoint: ["/app/metrics"]
+    command: ["serve", "metrics", "--openapi-spec=/app/openapi/openapi.yaml"]
     ports:
       - "8080:8080"
     environment:
@@ -62,7 +62,6 @@ services:
       ARGVIO_METRICS__LISTEN_ADDR: 0.0.0.0:8080
       ARGVIO_METRICS__JWT_SIGNING_KEY: dev-only-signing-key-change-me
       ARGVIO_METRICS__DEV_MODE: "true"
-    command: ["-openapi-spec=/app/openapi/openapi.yaml"]
     depends_on:
       migrate:
         condition: service_completed_successfully

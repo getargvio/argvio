@@ -17,7 +17,7 @@ metrics are enabled for your tenant.
 
 - A tenant and a `public_ingest`-scoped API key (docs/running-locally.md,
   "Seed a tenant + API key"). Argvio has no self-serve onboarding — the raw
-  key is issued once by `argvio-admin apikey create` and only its hash is
+  key is issued once by `argvio apikey create` and only its hash is
   stored.
 - Every resource span/log record must carry `cli.analytics.tier`
   (docs/allowlist.md) and use only allowlisted event names/attributes.
@@ -95,7 +95,7 @@ Argvio drop what it doesn't recognize.
 
 - **Argvio**: query it back through the `metrics` server, e.g.
   `GET /v1/traces?...` (docs/running-locally.md, "Query it back") or check
-  `argvio-admin`/Postgres directly.
+  `argvio`/Postgres directly.
 - **Other backend**: use whatever that vendor/stack provides. If nothing
   arrives at one side, check the collector's own logs/telemetry first
   (`service.telemetry.logs.level: debug` surfaces per-exporter send

@@ -484,7 +484,7 @@ components:
       scheme: bearer
       description: >
         A scoped API key issued with scope=metrics_query (see
-        `argvio-admin apikey create --scope metrics_query`). Distinct from
+        `argvio apikey create --scope metrics_query`). Distinct from
         the public server's ingest keys (scope=public_ingest) — an ingest
         key is rejected here and vice versa.
 

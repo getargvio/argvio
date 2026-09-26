@@ -40,7 +40,7 @@ type StoragePoolConfig struct {
 // ChunkInterval is applied at hypertable-creation time (see migrations/) —
 // changing it here after the hypertable exists does not retroactively
 // rechunk existing data, only new chunks. CompressionAfter/RetentionAfter
-// are reconciled at runtime by `cmd/admin policies apply`, which calls
+// are reconciled at runtime by `argvio policies apply`, which calls
 // Timescale's add_compression_policy/add_retention_policy (idempotent:
 // altering an existing job) so operators can tune them without hand-writing
 // SQL.

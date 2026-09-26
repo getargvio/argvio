@@ -1,6 +1,6 @@
-# Multi-stage build producing three binaries: public, metrics, admin.
-# docker-compose (docker-compose.yml, run from the repo root) runs each
-# from this one image with a different command — see docs/running-locally.md.
+# Single binary, single entrypoint: docker-compose (docker-compose.yml, run
+# from the repo root) runs every service from this one image with a
+# different `argvio <command>` — see docs/running-locally.md.
 
 FROM golang:1.27-trixie AS builder
 WORKDIR /src
@@ -9,18 +9,16 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 go build -o /out/public ./cmd/public && \
-    CGO_ENABLED=0 go build -o /out/metrics ./cmd/metrics && \
-    CGO_ENABLED=0 go build -o /out/admin ./cmd/admin
+RUN CGO_ENABLED=0 go build -o /out/argvio ./cmd/argvio
 
 FROM gcr.io/distroless/static-debian13:nonroot
 WORKDIR /app
 
-COPY --from=builder --chown=nonroot:nonroot /out/public /out/metrics /out/admin ./
+COPY --from=builder --chown=nonroot:nonroot /out/argvio ./
 # Runtime-read files: the allowlist schema (hot-reloadable, so it needs to
 # be a real file on disk, not baked into the Go binary) and the OpenAPI
-# spec (served by cmd/metrics when dev_mode is enabled).
+# spec (served by `argvio serve metrics` when dev_mode is enabled).
 COPY --chown=nonroot:nonroot schema/ ./schema/
 COPY --chown=nonroot:nonroot openapi/ ./openapi/
 
-ENTRYPOINT ["/app/public"]
+ENTRYPOINT ["/app/argvio"]

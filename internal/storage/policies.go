@@ -13,7 +13,7 @@ import (
 // ApplyRetentionAndCompressionPolicies reconciles each hypertable's
 // Timescale compression/retention policy to match cfg, so an operator can
 // change internal/config.StorageConfig's per-signal windows and roll them
-// out with `argvio-admin policies apply` instead of hand-writing SQL.
+// out with `argvio policies apply` instead of hand-writing SQL.
 //
 // This governs the *global* (per-hypertable) policy only — a per-tenant
 // override shorter than the global window is enforced separately by a
