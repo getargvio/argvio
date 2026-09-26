@@ -21,6 +21,13 @@ var (
 	Date    = "unknown"
 )
 
+// configPaths backs the root command's repeatable --config/-c flag, shared
+// by every subcommand that reads configuration (`serve public`, `serve
+// metrics`, `policies apply`) — one config document for the whole binary,
+// same as ory/hydra's `-c/--config hydra.yml`. Passing it more than once
+// layers files in order, each overriding the last.
+var configPaths []string
+
 func NewRootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "argvio",
@@ -29,6 +36,8 @@ func NewRootCommand() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+
+	root.PersistentFlags().StringArrayVarP(&configPaths, "config", "c", nil, "path to a config YAML (defaults + env still apply). Repeat to layer multiple files, later ones taking precedence")
 
 	root.AddCommand(
 		newServeCommand(),

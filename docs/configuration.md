@@ -2,7 +2,7 @@
 
 Generated from `internal/config`'s structs (`go run ./tools/gendocs`) — key names, env var names, types, and defaults come directly from the code that parses them; only the descriptions are hand-authored. Regenerate after changing any config struct.
 
-Layering: **defaults → YAML config file → environment variable overrides** (highest precedence wins). Env vars use prefix `ARGVIO_` and `__` as the nesting delimiter (plain `_` is legal inside a key name), e.g. `ARGVIO_STORAGE__PUBLIC_POOL__MAX_CONNS`.
+Layering: **defaults → YAML config file(s) → environment variable overrides** (highest precedence wins). One config document covers every subcommand (`public`, `metrics`, and `storage` sections together) — pass it with `argvio --config path/to/argvio.yaml <command>` (`-c` repeatable: later files override earlier ones), mirroring ory/hydra's single `hydra.yml`. See [`argvio.example.yaml`](../argvio.example.yaml) for a full example. Env vars use prefix `ARGVIO_` and `__` as the nesting delimiter (plain `_` is legal inside a key name), e.g. `ARGVIO_STORAGE__PUBLIC_POOL__MAX_CONNS`.
 
 ## `public` server (`argvio serve public`)
 

@@ -1,7 +1,7 @@
 // Command gendocs generates docs/configuration.md from the actual
-// internal/config structs, via reflection over PublicRoot/MetricsRoot and
-// their koanf tags — so the key names, env var names, and default values in
-// the doc can never drift from what LoadPublic/LoadMetrics actually parse.
+// internal/config structs, via reflection over config.Root and its koanf
+// tags — so the key names, env var names, and default values in the doc can
+// never drift from what config.Load actually parses.
 //
 // Field descriptions are hand-authored (colocated below, not derivable from
 // reflection alone since many of this codebase's doc comments cover a
@@ -95,14 +95,15 @@ var descriptions = map[string]string{
 }
 
 func main() {
-	publicRows := walk(reflect.TypeOf(config.PublicRoot{}), "", config.PublicDefaults())
-	metricsRows := walk(reflect.TypeOf(config.MetricsRoot{}), "", config.MetricsDefaults())
+	rows := walk(reflect.TypeOf(config.Root{}), "", config.Defaults())
+	publicRows := filterRows(rows, "log_level", "public.", "storage.")
+	metricsRows := filterRows(rows, "log_level", "metrics.", "storage.")
 
 	fmt.Println("# Configuration reference")
 	fmt.Println()
 	fmt.Println("Generated from `internal/config`'s structs (`go run ./tools/gendocs`) — key names, env var names, types, and defaults come directly from the code that parses them; only the descriptions are hand-authored. Regenerate after changing any config struct.")
 	fmt.Println()
-	fmt.Println("Layering: **defaults → YAML config file → environment variable overrides** (highest precedence wins). Env vars use prefix `ARGVIO_` and `__` as the nesting delimiter (plain `_` is legal inside a key name), e.g. `ARGVIO_STORAGE__PUBLIC_POOL__MAX_CONNS`.")
+	fmt.Println("Layering: **defaults → YAML config file(s) → environment variable overrides** (highest precedence wins). One config document covers every subcommand (`public`, `metrics`, and `storage` sections together) — pass it with `argvio --config path/to/argvio.yaml <command>` (`-c` repeatable: later files override earlier ones), mirroring ory/hydra's single `hydra.yml`. See [`argvio.example.yaml`](../argvio.example.yaml) for a full example. Env vars use prefix `ARGVIO_` and `__` as the nesting delimiter (plain `_` is legal inside a key name), e.g. `ARGVIO_STORAGE__PUBLIC_POOL__MAX_CONNS`.")
 	fmt.Println()
 
 	printSection("## `public` server (`argvio serve public`)", publicRows)
@@ -133,6 +134,23 @@ func printSection(header string, rows []row) {
 		fmt.Printf("| `%s` | `%s` | %s | `%s` | %s |\n", r.Path, r.EnvVar, r.Type, r.Default, desc)
 	}
 	fmt.Println()
+}
+
+// filterRows keeps rows whose Path is exactly one of exact, or starts with
+// one of prefixes — used to split config.Root's single flat field list back
+// into the "public server" / "metrics server" doc sections (both of which
+// also document the shared storage.* section).
+func filterRows(rows []row, keep ...string) []row {
+	var out []row
+	for _, r := range rows {
+		for _, k := range keep {
+			if r.Path == k || strings.HasPrefix(r.Path, k) {
+				out = append(out, r)
+				break
+			}
+		}
+	}
+	return out
 }
 
 func walk(t reflect.Type, prefix string, defaults map[string]any) []row {

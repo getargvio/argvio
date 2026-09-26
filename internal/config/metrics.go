@@ -36,17 +36,8 @@ type MetricsConfig struct {
 	ShutdownGracePeriod time.Duration `koanf:"shutdown_grace_period"`
 }
 
-// MetricsRoot is the full config document for `argvio serve metrics`.
-type MetricsRoot struct {
-	LogLevel string        `koanf:"log_level"`
-	Metrics  MetricsConfig `koanf:"metrics"`
-	Storage  StorageConfig `koanf:"storage"`
-}
-
 func metricsDefaults() map[string]any {
-	d := map[string]any{
-		"log_level": "info",
-
+	return map[string]any{
 		"metrics.listen_addr": "0.0.0.0:8080",
 		"metrics.tls.enabled": false,
 
@@ -62,43 +53,4 @@ func metricsDefaults() map[string]any {
 
 		"metrics.shutdown_grace_period": "15s",
 	}
-	for k, v := range storageDefaults() {
-		d[k] = v
-	}
-	return d
-}
-
-func (c MetricsRoot) Validate() error {
-	var errs []string
-	if c.Metrics.ListenAddr == "" {
-		errs = append(errs, "metrics.listen_addr must not be empty")
-	}
-	if c.Metrics.TLS.Enabled && (c.Metrics.TLS.CertFile == "" || c.Metrics.TLS.KeyFile == "") {
-		errs = append(errs, "metrics.tls.cert_file and key_file are required when metrics.tls.enabled = true")
-	}
-	switch c.Metrics.AuthMode {
-	case AuthModeJWT:
-		if c.Metrics.JWTSigningKey == "" {
-			errs = append(errs, "metrics.jwt_signing_key must be set when auth_mode = jwt")
-		}
-	case AuthModeAPIKey:
-		// scoped API keys are validated against Postgres at request time;
-		// nothing to check at config load beyond the mode itself.
-	default:
-		errs = append(errs, "metrics.auth_mode must be one of: jwt, api_key")
-	}
-	if c.Metrics.QueryTimeout <= 0 {
-		errs = append(errs, "metrics.query_timeout must be > 0")
-	}
-	if c.Metrics.MaxResultPageSize <= 0 || c.Metrics.DefaultResultPageSize <= 0 {
-		errs = append(errs, "metrics.max_result_page_size and default_result_page_size must be > 0")
-	}
-	if c.Metrics.DefaultResultPageSize > c.Metrics.MaxResultPageSize {
-		errs = append(errs, "metrics.default_result_page_size must not exceed max_result_page_size")
-	}
-	if c.Metrics.MaxTimeRangeSpan <= 0 {
-		errs = append(errs, "metrics.max_time_range_span must be > 0")
-	}
-	errs = append(errs, c.Storage.validate()...)
-	return joinErrors(errs)
 }

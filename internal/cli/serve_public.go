@@ -29,30 +29,28 @@ import (
 // This is the internet-facing edge — see docs/architecture.md for why it
 // runs as a separate process from `serve metrics`.
 func newServePublicCommand() *cobra.Command {
-	var configPath string
-
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:   "public",
 		Short: "Run the OTLP ingest server (gRPC + HTTP)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.LoadPublic(configPath)
+			root, err := config.Load(configPaths)
 			if err != nil {
 				return fmt.Errorf("config error:\n%w", err)
 			}
-			log := newLogger(cfg.LogLevel)
-			if err := runPublic(cfg, log); err != nil {
+			if err := root.ValidatePublic(); err != nil {
+				return fmt.Errorf("config error:\n%w", err)
+			}
+			log := newLogger(root.LogLevel)
+			if err := runPublic(root, log); err != nil {
 				log.Error("public server exited with error", "error", err)
 				return err
 			}
 			return nil
 		},
 	}
-
-	cmd.Flags().StringVar(&configPath, "config", "", "path to config YAML (optional; defaults + env still apply)")
-	return cmd
 }
 
-func runPublic(cfg *config.PublicRoot, log *slog.Logger) error {
+func runPublic(cfg *config.Root, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

@@ -21,7 +21,7 @@ func newPoliciesCommand() *cobra.Command {
 }
 
 func newPoliciesApplyCommand() *cobra.Command {
-	var dsn, configPath string
+	var dsn string
 	cmd := &cobra.Command{
 		Use:   "apply",
 		Short: "Reconcile Timescale compression/retention policies against config",
@@ -30,7 +30,7 @@ func newPoliciesApplyCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// config.Validate requires storage.dsn to be set; the CLI's
+			// Root.ValidateStorage requires storage.dsn to be set; the CLI's
 			// --dsn/$ARGVIO_STORAGE_DSN already resolved it above, so mirror
 			// it into the koanf-recognized env var rather than making the
 			// operator set both.
@@ -38,8 +38,11 @@ func newPoliciesApplyCommand() *cobra.Command {
 				return err
 			}
 
-			root, err := config.LoadPublic(configPath)
+			root, err := config.Load(configPaths)
 			if err != nil {
+				return fmt.Errorf("loading config: %w", err)
+			}
+			if err := root.ValidateStorage(); err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
 
@@ -58,6 +61,5 @@ func newPoliciesApplyCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&dsn, "dsn", "", "Postgres DSN (defaults to $ARGVIO_STORAGE_DSN)")
-	cmd.Flags().StringVar(&configPath, "config", "", "path to a config YAML with a storage: section (optional)")
 	return cmd
 }

@@ -34,17 +34,8 @@ type PublicConfig struct {
 	ShutdownGracePeriod time.Duration `koanf:"shutdown_grace_period"`
 }
 
-// PublicRoot is the full config document for `argvio serve public`.
-type PublicRoot struct {
-	LogLevel string        `koanf:"log_level"`
-	Public   PublicConfig  `koanf:"public"`
-	Storage  StorageConfig `koanf:"storage"`
-}
-
 func publicDefaults() map[string]any {
-	d := map[string]any{
-		"log_level": "info",
-
+	return map[string]any{
 		"public.grpc_listen_addr": "0.0.0.0:4317",
 		"public.http_listen_addr": "0.0.0.0:4318",
 		"public.tls.enabled":      false,
@@ -67,50 +58,4 @@ func publicDefaults() map[string]any {
 
 		"public.shutdown_grace_period": "15s",
 	}
-	for k, v := range storageDefaults() {
-		d[k] = v
-	}
-	return d
-}
-
-// Validate fails fast with every problem found, not just the first, so a
-// misconfigured deploy gets one useful error instead of a whack-a-mole
-// restart loop.
-func (c PublicRoot) Validate() error {
-	var errs []string
-	if c.Public.GRPCListenAddr == "" {
-		errs = append(errs, "public.grpc_listen_addr must not be empty")
-	}
-	if c.Public.HTTPListenAddr == "" {
-		errs = append(errs, "public.http_listen_addr must not be empty")
-	}
-	if c.Public.TLS.Enabled && (c.Public.TLS.CertFile == "" || c.Public.TLS.KeyFile == "") {
-		errs = append(errs, "public.tls.cert_file and key_file are required when public.tls.enabled = true")
-	}
-	if c.Public.MaxBatchSize <= 0 {
-		errs = append(errs, "public.max_batch_size must be > 0")
-	}
-	if c.Public.MaxAttributeCount <= 0 {
-		errs = append(errs, "public.max_attribute_count must be > 0")
-	}
-	if c.Public.MaxAttributeKeyLength <= 0 {
-		errs = append(errs, "public.max_attribute_key_length must be > 0")
-	}
-	if c.Public.MaxAttributeStringValueLength <= 0 {
-		errs = append(errs, "public.max_attribute_string_value_length must be > 0")
-	}
-	if c.Public.MaxTimestampSkewPast <= 0 || c.Public.MaxTimestampSkewFuture <= 0 {
-		errs = append(errs, "public.max_timestamp_skew_past and max_timestamp_skew_future must be > 0")
-	}
-	if c.Public.APIKeyCacheTTL <= 0 {
-		errs = append(errs, "public.api_key_cache_ttl must be > 0")
-	}
-	if c.Public.RateLimitRequestsPerSecond <= 0 {
-		errs = append(errs, "public.rate_limit_requests_per_second must be > 0")
-	}
-	if c.Public.AllowlistSchemaPath == "" {
-		errs = append(errs, "public.allowlist_schema_path must not be empty")
-	}
-	errs = append(errs, c.Storage.validate()...)
-	return joinErrors(errs)
 }
