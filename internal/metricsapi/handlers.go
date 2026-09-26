@@ -3,6 +3,8 @@ package metricsapi
 import (
 	"context"
 	"net/http"
+
+	"github.com/getargvio/argvio/internal/storage"
 )
 
 // responseDataKey is the JSON envelope key every handler wraps its result
@@ -38,105 +40,68 @@ func (s *Server) handleListTraces(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{responseDataKey: rows})
 }
 
-func (s *Server) handleLatencyPercentiles(w http.ResponseWriter, r *http.Request) {
-	scope, ok := scopeFromContext(r.Context())
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "missing tenant scope")
-		return
+// Bucket granularities each rollup can serve: command stats and exit codes
+// have an hourly rollup underneath; session activity is daily at its
+// finest; retention cohorts are day/week/month.
+var (
+	anyBucket   = []storage.Bucket{storage.BucketHour, storage.BucketDay, storage.BucketWeek, storage.BucketMonth}
+	dailyBucket = []storage.Bucket{storage.BucketDay, storage.BucketWeek, storage.BucketMonth}
+)
+
+// bucketedQuery is the shape every time-bucketed aggregate in
+// internal/storage shares.
+type bucketedQuery[T any] func(context.Context, storage.TenantScope, storage.Filters, storage.Bucket) ([]T, error)
+
+// serveBucketed builds the handler for one time-bucketed aggregate
+// endpoint: tenant scope, filters, and bucket (defaulting to def,
+// restricted to allowed) are resolved the same way for all of them before
+// query runs under the per-query timeout. A free function rather than a
+// Server method because Go methods can't take type parameters.
+func serveBucketed[T any](s *Server, name string, def storage.Bucket, allowed []storage.Bucket, query bucketedQuery[T]) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		scope, ok := scopeFromContext(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized", "missing tenant scope")
+			return
+		}
+		f, err := s.parseFilters(r)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		bucket, err := parseBucket(r, def, allowed...)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		ctx, cancel := s.withQuery(r.Context())
+		defer cancel()
+		points, err := query(ctx, scope, f, bucket)
+		if err != nil {
+			s.Log.Error("metricsapi: "+name+" failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{responseDataKey: points})
 	}
-	f, err := s.parseFilters(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	bucket, err := parseBucket(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	ctx, cancel := s.withQuery(r.Context())
-	defer cancel()
-	points, err := s.QB.LatencyPercentiles(ctx, scope, f, bucket)
-	if err != nil {
-		s.Log.Error("metricsapi: latency percentiles failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{responseDataKey: points})
 }
 
-func (s *Server) handleErrorRate(w http.ResponseWriter, r *http.Request) {
+// handleDimensions lists the distinct filter values a tenant has data for.
+// Deliberately takes no time range (and so skips parseFilters): option
+// lists should cover everything the tenant has, not one query window.
+func (s *Server) handleDimensions(w http.ResponseWriter, r *http.Request) {
 	scope, ok := scopeFromContext(r.Context())
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "unauthorized", "missing tenant scope")
 		return
 	}
-	f, err := s.parseFilters(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	bucket, err := parseBucket(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
 	ctx, cancel := s.withQuery(r.Context())
 	defer cancel()
-	points, err := s.QB.ErrorRateSeries(ctx, scope, f, bucket)
+	dims, err := s.QB.ListDimensions(ctx, scope, s.MaxResultPageSize)
 	if err != nil {
-		s.Log.Error("metricsapi: error rate failed", "error", err)
+		s.Log.Error("metricsapi: list dimensions failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{responseDataKey: points})
-}
-
-func (s *Server) handleCommandFrequency(w http.ResponseWriter, r *http.Request) {
-	scope, ok := scopeFromContext(r.Context())
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "missing tenant scope")
-		return
-	}
-	f, err := s.parseFilters(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	bucket, err := parseBucket(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	ctx, cancel := s.withQuery(r.Context())
-	defer cancel()
-	points, err := s.QB.CommandFrequency(ctx, scope, f, bucket)
-	if err != nil {
-		s.Log.Error("metricsapi: command frequency failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{responseDataKey: points})
-}
-
-func (s *Server) handleCohorts(w http.ResponseWriter, r *http.Request) {
-	scope, ok := scopeFromContext(r.Context())
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "missing tenant scope")
-		return
-	}
-	f, err := s.parseFilters(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	ctx, cancel := s.withQuery(r.Context())
-	defer cancel()
-	points, err := s.QB.SessionCohort(ctx, scope, f)
-	if err != nil {
-		s.Log.Error("metricsapi: cohorts failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{responseDataKey: points})
+	writeJSON(w, http.StatusOK, map[string]any{responseDataKey: dims})
 }

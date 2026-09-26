@@ -9,7 +9,9 @@ frontend, no CLI-side SDK.
   for metrics, logs, traces. Internet-facing, high-volume, untrusted input.
 - **`metrics`** (`cmd/metrics`) — read-oriented REST API: filtering +
   aggregation (percentile latencies, error rate, command frequency,
-  cohorts) over ingested telemetry. Internal/trusted-tenant-facing.
+  exit-code distribution, CI-vs-interactive split, session cohorts, active
+  installs, cohort retention) plus a distinct filter-values lookup, over
+  ingested telemetry. Internal/trusted-tenant-facing.
 - **`admin`** (`cmd/admin`) — operator CLI: migrations, tenant/API-key
   seeding, Timescale policy reconciliation, per-tenant retention sweeps.
 
