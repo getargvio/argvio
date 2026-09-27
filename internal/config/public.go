@@ -19,13 +19,16 @@ type PublicConfig struct {
 	MaxTimestampSkewPast          time.Duration `koanf:"max_timestamp_skew_past"`
 	MaxTimestampSkewFuture        time.Duration `koanf:"max_timestamp_skew_future"`
 
-	// Auth (tenant API key validation on every request).
 	APIKeyCacheTTL time.Duration `koanf:"api_key_cache_ttl"`
 
-	// Per-tenant rate limiting (token bucket).
 	RateLimitRequestsPerSecond float64 `koanf:"rate_limit_requests_per_second"`
 	RateLimitBytesPerSecond    float64 `koanf:"rate_limit_bytes_per_second"`
 	RateLimitBurst             int     `koanf:"rate_limit_burst"`
+
+	// JWT/OIDC rate limits, separate from the api_key ones above. Zero inherits them.
+	JWTRateLimitRequestsPerSecond float64 `koanf:"jwt_rate_limit_requests_per_second"`
+	JWTRateLimitBytesPerSecond    float64 `koanf:"jwt_rate_limit_bytes_per_second"`
+	JWTRateLimitBurst             int     `koanf:"jwt_rate_limit_burst"`
 
 	// Allowlist/tier schema (internal/allowlist).
 	AllowlistSchemaPath string `koanf:"allowlist_schema_path"`
@@ -52,6 +55,10 @@ func publicDefaults() map[string]any {
 		"public.rate_limit_requests_per_second": 200.0,
 		"public.rate_limit_bytes_per_second":    5_000_000.0,
 		"public.rate_limit_burst":               400,
+
+		"public.jwt_rate_limit_requests_per_second": 0.0,
+		"public.jwt_rate_limit_bytes_per_second":    0.0,
+		"public.jwt_rate_limit_burst":               0,
 
 		"public.allowlist_schema_path": "schema/allowlist/v1.yaml",
 		"public.allowlist_hot_reload":  true,

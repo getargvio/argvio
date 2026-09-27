@@ -69,6 +69,36 @@ WHERE k.key_hash = $1 AND k.scope = $2 AND k.revoked_at IS NULL`
 	return &r, nil
 }
 
+// LookupByTenantID resolves by tenant ID; Resolved.APIKey is always zero.
+func (s *Store) LookupByTenantID(ctx context.Context, tenantID uuid.UUID) (*Resolved, error) {
+	const q = `
+SELECT
+    t.id, t.slug, t.name, t.status,
+    tc.tier_ceiling, tc.tier_enforcement_mode,
+    tc.rate_limit_requests_per_sec, tc.rate_limit_bytes_per_sec, tc.rate_limit_burst,
+    tc.retention_traces_days, tc.retention_logs_days, tc.retention_metrics_days
+FROM tenants t
+JOIN tenant_config tc ON tc.tenant_id = t.id
+WHERE t.id = $1`
+
+	row := s.pool.QueryRow(ctx, q, tenantID)
+	var r Resolved
+	err := row.Scan(
+		&r.Tenant.ID, &r.Tenant.Slug, &r.Tenant.Name, &r.Tenant.Status,
+		&r.Config.TierCeiling, &r.Config.TierEnforcementMode,
+		&r.Config.RateLimitRequestsPerSec, &r.Config.RateLimitBytesPerSec, &r.Config.RateLimitBurst,
+		&r.Config.RetentionTracesDays, &r.Config.RetentionLogsDays, &r.Config.RetentionMetricsDays,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("tenant: lookup by tenant id: %w", err)
+	}
+	r.Config.TenantID = r.Tenant.ID
+	return &r, nil
+}
+
 // TouchLastUsed updates api_keys.last_used_at. Best-effort — callers on the
 // hot path should fire this off without blocking the request (see
 // internal/tenant.Cache for the async wrapper) since it's purely for

@@ -19,6 +19,7 @@ import (
 
 	"github.com/getargvio/argvio/internal/config"
 	"github.com/getargvio/argvio/internal/storage"
+	"github.com/getargvio/argvio/internal/tenant"
 )
 
 func strp(s string) *string { return &s }
@@ -58,6 +59,9 @@ func TestMetricsAPI_EndToEnd_Live(t *testing.T) {
 		if _, err := pool.Exec(ctx, `INSERT INTO tenants (id, slug, name) VALUES ($1,$2,$3)`, id, id.String(), "t"); err != nil {
 			t.Fatalf("seed tenant: %v", err)
 		}
+		if _, err := pool.Exec(ctx, `INSERT INTO tenant_config (tenant_id, tier_ceiling, tier_enforcement_mode) VALUES ($1, 'basic', 'strip')`, id); err != nil {
+			t.Fatalf("seed tenant_config: %v", err)
+		}
 	}
 
 	w := storage.NewWriter(pool)
@@ -86,14 +90,16 @@ func TestMetricsAPI_EndToEnd_Live(t *testing.T) {
 	}
 
 	secret := "test-signing-secret"
+	resolver := tenant.NewCache(tenant.NewStore(pool), time.Minute)
 	srv := NewServer(config.MetricsConfig{
-		AuthMode:              config.AuthModeJWT,
-		JWTSigningKey:         secret,
 		MaxResultPageSize:     1000,
 		DefaultResultPageSize: 100,
 		MaxTimeRangeSpan:      90 * 24 * time.Hour,
 		QueryTimeout:          5 * time.Second,
-	}, storage.NewQueryBuilder(pool), nil, "", slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
+	}, config.AuthConfig{
+		Methods:       []config.AuthMethod{config.AuthMethodJWT},
+		JWTSigningKey: secret,
+	}, storage.NewQueryBuilder(pool), resolver, "", slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()

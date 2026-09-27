@@ -3,6 +3,7 @@ package otlp
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -14,17 +15,21 @@ import (
 	"go.opentelemetry.io/collector/pdata/ptrace/ptraceotlp"
 )
 
-// grpcAPIKey reads APIKeyHeader out of incoming gRPC metadata.
-func grpcAPIKey(ctx context.Context) string {
+// grpcCredential falls back to "authorization: Bearer <token>" if CredentialHeader is unset.
+func grpcCredential(ctx context.Context) string {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		return ""
 	}
-	vals := md.Get(APIKeyHeader)
-	if len(vals) == 0 {
-		return ""
+	if vals := md.Get(CredentialHeader); len(vals) > 0 {
+		return vals[0]
 	}
-	return vals[0]
+	if vals := md.Get("authorization"); len(vals) > 0 {
+		if tok, ok := strings.CutPrefix(vals[0], "Bearer "); ok {
+			return tok
+		}
+	}
+	return ""
 }
 
 // grpcAuthError maps this package's auth/rate-limit sentinel errors to the
@@ -33,7 +38,7 @@ func grpcAPIKey(ctx context.Context) string {
 func grpcAuthError(err error) error {
 	switch {
 	case errors.Is(err, ErrUnauthenticated):
-		return status.Error(codes.Unauthenticated, "invalid or missing API key")
+		return status.Error(codes.Unauthenticated, "invalid or missing credential")
 	case errors.Is(err, ErrTenantSuspended):
 		return status.Error(codes.PermissionDenied, "tenant suspended")
 	case errors.Is(err, ErrRateLimited):
@@ -61,12 +66,12 @@ type MetricsGRPCService struct {
 
 func (s *MetricsGRPCService) Export(ctx context.Context, req pmetricotlp.ExportRequest) (pmetricotlp.ExportResponse, error) {
 	raw, _ := req.MarshalProto() // size estimate for byte-rate limiting; see docs/architecture.md
-	resolved, err := s.authenticate(ctx, grpcAPIKey(ctx), len(raw))
+	id, err := s.authenticate(ctx, grpcCredential(ctx), len(raw))
 	if err != nil {
 		return pmetricotlp.ExportResponse{}, grpcAuthError(err)
 	}
 
-	pipeline := s.newPipeline(resolved)
+	pipeline := s.newPipeline(id)
 	_, rejected, sample, err := pipeline.ProcessMetrics(ctx, req.Metrics())
 	if err != nil {
 		return pmetricotlp.ExportResponse{}, grpcProcessError(err)
@@ -88,12 +93,12 @@ type LogsGRPCService struct {
 
 func (s *LogsGRPCService) Export(ctx context.Context, req plogotlp.ExportRequest) (plogotlp.ExportResponse, error) {
 	raw, _ := req.MarshalProto()
-	resolved, err := s.authenticate(ctx, grpcAPIKey(ctx), len(raw))
+	id, err := s.authenticate(ctx, grpcCredential(ctx), len(raw))
 	if err != nil {
 		return plogotlp.ExportResponse{}, grpcAuthError(err)
 	}
 
-	pipeline := s.newPipeline(resolved)
+	pipeline := s.newPipeline(id)
 	_, rejected, sample, err := pipeline.ProcessLogs(ctx, req.Logs())
 	if err != nil {
 		return plogotlp.ExportResponse{}, grpcProcessError(err)
@@ -115,12 +120,12 @@ type TracesGRPCService struct {
 
 func (s *TracesGRPCService) Export(ctx context.Context, req ptraceotlp.ExportRequest) (ptraceotlp.ExportResponse, error) {
 	raw, _ := req.MarshalProto()
-	resolved, err := s.authenticate(ctx, grpcAPIKey(ctx), len(raw))
+	id, err := s.authenticate(ctx, grpcCredential(ctx), len(raw))
 	if err != nil {
 		return ptraceotlp.ExportResponse{}, grpcAuthError(err)
 	}
 
-	pipeline := s.newPipeline(resolved)
+	pipeline := s.newPipeline(id)
 	_, rejected, sample, err := pipeline.ProcessTraces(ctx, req.Traces())
 	if err != nil {
 		return ptraceotlp.ExportResponse{}, grpcProcessError(err)

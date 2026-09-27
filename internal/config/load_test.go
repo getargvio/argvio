@@ -50,17 +50,17 @@ func TestValidatePublic_MissingDSNFails(t *testing.T) {
 	}
 }
 
-func TestValidateMetrics_DefaultAuthModeRequiresSigningKey(t *testing.T) {
+func TestValidateMetrics_DefaultAuthMethodsRequireSigningKey(t *testing.T) {
 	t.Setenv("ARGVIO_STORAGE__DSN", "postgres://user:pass@localhost:5432/argvio")
 	c, err := Load(nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if err := c.ValidateMetrics(); err == nil {
-		t.Fatalf("expected validation error: default auth_mode=jwt requires jwt_signing_key")
+		t.Fatalf("expected validation error: default auth.methods includes jwt, which requires jwt_signing_key")
 	}
 
-	t.Setenv("ARGVIO_METRICS__JWT_SIGNING_KEY", "test-secret")
+	t.Setenv("ARGVIO_AUTH__JWT_SIGNING_KEY", "test-secret")
 	c, err = Load(nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -68,8 +68,34 @@ func TestValidateMetrics_DefaultAuthModeRequiresSigningKey(t *testing.T) {
 	if err := c.ValidateMetrics(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if c.Metrics.AuthMode != AuthModeJWT {
-		t.Errorf("auth_mode = %q, want jwt", c.Metrics.AuthMode)
+	if !c.Auth.Has(AuthMethodJWT) || !c.Auth.Has(AuthMethodAPIKey) {
+		t.Errorf("auth.methods = %v, want [api_key jwt] default", c.Auth.Methods)
+	}
+}
+
+func TestValidateMetrics_OIDCMethodRequiresIssuerAndAudience(t *testing.T) {
+	t.Setenv("ARGVIO_STORAGE__DSN", "postgres://user:pass@localhost:5432/argvio")
+	t.Setenv("ARGVIO_AUTH__METHODS", "oidc")
+
+	c, err := Load(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := c.ValidateMetrics(); err == nil {
+		t.Fatalf("expected validation error: auth.methods=[oidc] requires issuer_url and audience")
+	}
+
+	t.Setenv("ARGVIO_AUTH__OIDC__ISSUER_URL", "https://idp.example.com")
+	t.Setenv("ARGVIO_AUTH__OIDC__AUDIENCE", "argvio-metrics")
+	c, err = Load(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := c.ValidateMetrics(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c.Auth.OIDC.JWKSCacheTTL != 15*time.Minute {
+		t.Errorf("oidc.jwks_cache_ttl = %v, want 15m default", c.Auth.OIDC.JWKSCacheTTL)
 	}
 }
 

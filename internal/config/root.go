@@ -9,6 +9,7 @@ package config
 // see ValidatePublic/ValidateMetrics/ValidateStorage.
 type Root struct {
 	LogLevel string        `koanf:"log_level"`
+	Auth     AuthConfig    `koanf:"auth"`
 	Public   PublicConfig  `koanf:"public"`
 	Metrics  MetricsConfig `koanf:"metrics"`
 	Storage  StorageConfig `koanf:"storage"`
@@ -17,6 +18,9 @@ type Root struct {
 func defaults() map[string]any {
 	d := map[string]any{
 		"log_level": "info",
+	}
+	for k, v := range authDefaults() {
+		d[k] = v
 	}
 	for k, v := range storageDefaults() {
 		d[k] = v
@@ -68,6 +72,7 @@ func (r Root) ValidatePublic() error {
 	if r.Public.AllowlistSchemaPath == "" {
 		errs = append(errs, "public.allowlist_schema_path must not be empty")
 	}
+	errs = append(errs, r.Auth.validate()...)
 	errs = append(errs, r.Storage.validate()...)
 	return joinErrors(errs)
 }
@@ -82,17 +87,7 @@ func (r Root) ValidateMetrics() error {
 	if r.Metrics.TLS.Enabled && (r.Metrics.TLS.CertFile == "" || r.Metrics.TLS.KeyFile == "") {
 		errs = append(errs, "metrics.tls.cert_file and key_file are required when metrics.tls.enabled = true")
 	}
-	switch r.Metrics.AuthMode {
-	case AuthModeJWT:
-		if r.Metrics.JWTSigningKey == "" {
-			errs = append(errs, "metrics.jwt_signing_key must be set when auth_mode = jwt")
-		}
-	case AuthModeAPIKey:
-		// scoped API keys are validated against Postgres at request time;
-		// nothing to check at config load beyond the mode itself.
-	default:
-		errs = append(errs, "metrics.auth_mode must be one of: jwt, api_key")
-	}
+	errs = append(errs, r.Auth.validate()...)
 	if r.Metrics.QueryTimeout <= 0 {
 		errs = append(errs, "metrics.query_timeout must be > 0")
 	}

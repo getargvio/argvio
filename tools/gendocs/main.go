@@ -35,6 +35,15 @@ type row struct {
 var descriptions = map[string]string{
 	"log_level": "Log level: debug, info, warn, error.",
 
+	"auth.methods": "Which auth methods this deployment accepts, in any combination: api_key (scoped tenant API key), jwt (dashboard-user session, HS256, requires jwt_signing_key), oidc (third-party OIDC provider, requires oidc.issuer_url and oidc.audience). Global — shared by both the public and metrics servers; each still only accepts its own tenant API-key scope (public_ingest vs metrics_query).",
+
+	"auth.jwt_signing_key": "HMAC secret for verifying jwt-method tokens. Required when auth.methods includes jwt.",
+
+	"auth.oidc.issuer_url":      "OIDC issuer URL (no trailing slash). Its /.well-known/openid-configuration and referenced JWKS are fetched (and cached) at request time. Required when auth.methods includes oidc.",
+	"auth.oidc.audience":        "Expected `aud` claim on incoming tokens. Required when auth.methods includes oidc.",
+	"auth.oidc.required_scopes": "OAuth2 scopes that must all be present (via the `scope` or `scp` claim) for a token to be accepted. Empty means no scope requirement.",
+	"auth.oidc.jwks_cache_ttl":  "How long a fetched JWKS is cached before being refreshed. An unrecognized `kid` always triggers one immediate refresh regardless of this TTL (to pick up key rotation without waiting).",
+
 	"public.grpc_listen_addr": "OTLP/gRPC listen address.",
 	"public.http_listen_addr": "OTLP/HTTP listen address.",
 	"public.tls.enabled":      "Enable TLS on both listeners.",
@@ -48,11 +57,15 @@ var descriptions = map[string]string{
 	"public.max_timestamp_skew_past":           "Reject a record whose timestamp is older than now minus this.",
 	"public.max_timestamp_skew_future":         "Reject a record whose timestamp is later than now plus this.",
 
-	"public.api_key_cache_ttl": "TTL for the in-memory API-key resolution cache (positive and negative results).",
+	"public.api_key_cache_ttl": "TTL for the in-memory tenant identity resolution cache — both API-key lookups and the tenant lookup a jwt/oidc caller's tenant_id claim resolves to (positive and negative results).",
 
-	"public.rate_limit_requests_per_second": "Default per-tenant request rate limit (token bucket). Overridable per tenant in tenant_config.",
-	"public.rate_limit_bytes_per_second":    "Default per-tenant byte-rate limit. Overridable per tenant.",
-	"public.rate_limit_burst":               "Default per-tenant request-burst size. Overridable per tenant.",
+	"public.rate_limit_requests_per_second": "Default request rate limit (token bucket) for api_key-authenticated requests. Overridable per tenant in tenant_config.",
+	"public.rate_limit_bytes_per_second":    "Default byte-rate limit for api_key-authenticated requests. Overridable per tenant.",
+	"public.rate_limit_burst":               "Default request-burst size for api_key-authenticated requests. Overridable per tenant.",
+
+	"public.jwt_rate_limit_requests_per_second": "Request rate limit for jwt/oidc-authenticated requests. 0 (default) means \"use rate_limit_requests_per_second instead\". Overridable per tenant in tenant_config.",
+	"public.jwt_rate_limit_bytes_per_second":    "Byte-rate limit for jwt/oidc-authenticated requests. 0 (default) means \"use rate_limit_bytes_per_second instead\".",
+	"public.jwt_rate_limit_burst":               "Request-burst size for jwt/oidc-authenticated requests. 0 (default) means \"use rate_limit_burst instead\".",
 
 	"public.allowlist_schema_path": "Path to the versioned allowlist/tier schema YAML (see docs/allowlist.md).",
 	"public.allowlist_hot_reload":  "Watch allowlist_schema_path and hot-reload on change without a restart.",
@@ -63,9 +76,6 @@ var descriptions = map[string]string{
 	"metrics.tls.enabled":   "Enable TLS on the listener.",
 	"metrics.tls.cert_file": "PEM certificate path (required if tls.enabled).",
 	"metrics.tls.key_file":  "PEM private key path (required if tls.enabled).",
-
-	"metrics.auth_mode":       "jwt (dashboard-user session, HS256, requires jwt_signing_key) or api_key (scoped API key, scope=metrics_query).",
-	"metrics.jwt_signing_key": "HMAC secret for verifying dashboard JWTs. Required when auth_mode=jwt.",
 
 	"metrics.query_timeout":            "Per-query server-side timeout.",
 	"metrics.max_result_page_size":     "Hard ceiling on ?limit=; requests above this are clamped.",
@@ -96,8 +106,8 @@ var descriptions = map[string]string{
 
 func main() {
 	rows := walk(reflect.TypeOf(config.Root{}), "", config.Defaults())
-	publicRows := filterRows(rows, "log_level", "public.", "storage.")
-	metricsRows := filterRows(rows, "log_level", "metrics.", "storage.")
+	publicRows := filterRows(rows, "log_level", "auth.", "public.", "storage.")
+	metricsRows := filterRows(rows, "log_level", "auth.", "metrics.", "storage.")
 
 	fmt.Println("# Configuration reference")
 	fmt.Println()
@@ -199,6 +209,8 @@ func typeName(t reflect.Type) string {
 		return "int"
 	case reflect.Float64:
 		return "float"
+	case reflect.Slice:
+		return "[]" + typeName(t.Elem())
 	default:
 		return t.String()
 	}

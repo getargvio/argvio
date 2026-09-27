@@ -116,18 +116,21 @@ fmt.Println("rejected_spans:", resp.PartialSuccess().RejectedSpans())
 go run ./cmd/argvio apikey create --tenant-id <TENANT_ID> --scope metrics_query --dsn "$DSN"
 ```
 
-With `auth_mode=api_key` (`ARGVIO_METRICS__AUTH_MODE=api_key` — default is
-`jwt`, which needs a signed token instead, see docs/configuration.md):
+`auth.methods` defaults to `[api_key, jwt]` (global — see
+docs/configuration.md), so an `api_key`-scoped token works out of the box:
 
 ```sh
 curl -H "Authorization: Bearer <METRICS_QUERY_KEY>" \
   "http://localhost:8080/v1/traces?from=2026-08-01T00:00:00Z&limit=10"
 ```
 
-With the default `jwt` auth mode, sign a token whose `tenant_id` claim
-matches `<TENANT_ID>`, HS256, using `ARGVIO_METRICS__JWT_SIGNING_KEY` as
-the secret — see `internal/metricsapi/auth.go` for exactly what's
-validated (algorithm pinned to HS256; `tenant_id` claim required).
+Or, since `jwt` is also enabled by default, sign a token whose `tenant_id`
+claim matches `<TENANT_ID>`, HS256, using `ARGVIO_AUTH__JWT_SIGNING_KEY` as
+the secret — see `internal/authn/authn.go` for exactly what's validated
+(algorithm pinned to HS256; `tenant_id` claim required). The same
+`internal/authn.Verifier` and `auth.methods` config also apply to `public`
+now, so a signed JWT works against the OTLP ingest endpoint too, not just
+`metrics` — see docs/architecture.md.
 
 ## Continuous aggregates in local dev
 

@@ -2,7 +2,7 @@
 # subcommand that reads config (`serve public`, `serve metrics`, `policies
 # apply`), same as ory/hydra's single hydra.yml. Every key here has a
 # built-in default (see docs/configuration.md); only storage.dsn and
-# metrics.jwt_signing_key have no safe default and must be set somewhere
+# auth.jwt_signing_key have no safe default and must be set somewhere
 # (here, a YAML file, or the matching ARGVIO_* env var).
 #
 # Usage:
@@ -14,6 +14,21 @@
 # --config files override earlier ones) -> ARGVIO_* environment variables.
 
 log_level: info
+
+# Global — shared by `serve public` and `serve metrics`. Any subset of
+# methods may be enabled at once (e.g. public ingest accepting both a
+# generic tenant API key and a user JWT); each server still only accepts
+# its own tenant API-key scope (public_ingest vs metrics_query).
+auth:
+  methods: [api_key, jwt] # any of: api_key, jwt, oidc
+  jwt_signing_key: "change-me-in-production"
+  # Only used when methods includes oidc — validates bearer tokens against
+  # a third-party identity provider instead of a static HMAC secret.
+  # oidc:
+  #   issuer_url: "https://your-tenant.example.auth0.com/"
+  #   audience: "argvio-metrics"
+  #   required_scopes: ["metrics:read"]
+  #   jwks_cache_ttl: 15m
 
 storage:
   dsn: "postgres://postgres:postgres@localhost:5432/argvio?sslmode=disable"
@@ -33,9 +48,13 @@ public:
   rate_limit_requests_per_second: 200
   rate_limit_bytes_per_second: 5000000
   rate_limit_burst: 400
+  # Applied instead of the limits above to jwt/oidc-authenticated ingest
+  # requests (e.g. a dashboard user's browser, as opposed to a service's
+  # generic ingest key) — 0 means "use the limits above instead".
+  # jwt_rate_limit_requests_per_second: 50
+  # jwt_rate_limit_bytes_per_second: 1000000
+  # jwt_rate_limit_burst: 100
 
 metrics:
   listen_addr: "0.0.0.0:8080"
-  auth_mode: jwt # jwt | api_key
-  jwt_signing_key: "change-me-in-production"
   dev_mode: false

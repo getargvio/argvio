@@ -27,11 +27,9 @@ const (
 	contentTypeJSON     = "application/json"
 )
 
-// httpAPIKey reads APIKeyHeader, falling back to a standard
-// "Authorization: Bearer <key>" header for OTel exporter configs that only
-// support the standard auth header.
-func httpAPIKey(r *http.Request) string {
-	if k := r.Header.Get(APIKeyHeader); k != "" {
+// extractHTTPCredential falls back to "Authorization: Bearer <credential>" if CredentialHeader is unset.
+func extractHTTPCredential(r *http.Request) string {
+	if k := r.Header.Get(CredentialHeader); k != "" {
 		return k
 	}
 	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
@@ -138,13 +136,13 @@ func (s *Server) handleMetricsHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resolved, err := s.core.authenticate(r.Context(), httpAPIKey(r), len(body))
+	id, err := s.core.authenticate(r.Context(), extractHTTPCredential(r), len(body))
 	if err != nil {
 		writeHTTPError(w, wantProtobuf, httpStatusForAuthError(err), codes.Unauthenticated, err.Error())
 		return
 	}
 
-	pipeline := s.core.newPipeline(resolved)
+	pipeline := s.core.newPipeline(id)
 	_, rejected, sample, err := pipeline.ProcessMetrics(r.Context(), req.Metrics())
 	if err != nil {
 		writeHTTPError(w, wantProtobuf, httpStatusForProcessError(err), codes.InvalidArgument, err.Error())
@@ -182,13 +180,13 @@ func (s *Server) handleLogsHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resolved, err := s.core.authenticate(r.Context(), httpAPIKey(r), len(body))
+	id, err := s.core.authenticate(r.Context(), extractHTTPCredential(r), len(body))
 	if err != nil {
 		writeHTTPError(w, wantProtobuf, httpStatusForAuthError(err), codes.Unauthenticated, err.Error())
 		return
 	}
 
-	pipeline := s.core.newPipeline(resolved)
+	pipeline := s.core.newPipeline(id)
 	_, rejected, sample, err := pipeline.ProcessLogs(r.Context(), req.Logs())
 	if err != nil {
 		writeHTTPError(w, wantProtobuf, httpStatusForProcessError(err), codes.InvalidArgument, err.Error())
@@ -226,13 +224,13 @@ func (s *Server) handleTracesHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resolved, err := s.core.authenticate(r.Context(), httpAPIKey(r), len(body))
+	id, err := s.core.authenticate(r.Context(), extractHTTPCredential(r), len(body))
 	if err != nil {
 		writeHTTPError(w, wantProtobuf, httpStatusForAuthError(err), codes.Unauthenticated, err.Error())
 		return
 	}
 
-	pipeline := s.core.newPipeline(resolved)
+	pipeline := s.core.newPipeline(id)
 	_, rejected, sample, err := pipeline.ProcessTraces(r.Context(), req.Traces())
 	if err != nil {
 		writeHTTPError(w, wantProtobuf, httpStatusForProcessError(err), codes.InvalidArgument, err.Error())

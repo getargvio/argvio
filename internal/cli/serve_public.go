@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/getargvio/argvio/internal/allowlist"
+	"github.com/getargvio/argvio/internal/authn"
 	"github.com/getargvio/argvio/internal/config"
 	"github.com/getargvio/argvio/internal/otlp"
 	"github.com/getargvio/argvio/internal/ratelimit"
@@ -92,11 +93,22 @@ func runPublic(cfg *config.Root, log *slog.Logger) error {
 		close(cacheStop)
 	}()
 
+	perMethod := map[authn.Method]ratelimit.Defaults{
+		authn.MethodJWT: {
+			RequestsPerSecond: cfg.Public.JWTRateLimitRequestsPerSecond,
+			BytesPerSecond:    cfg.Public.JWTRateLimitBytesPerSecond,
+			Burst:             cfg.Public.JWTRateLimitBurst,
+		},
+	}
+	perMethod[authn.MethodOIDC] = perMethod[authn.MethodJWT]
+
 	limiter := ratelimit.New(ratelimit.Defaults{
 		RequestsPerSecond: cfg.Public.RateLimitRequestsPerSecond,
 		BytesPerSecond:    cfg.Public.RateLimitBytesPerSecond,
 		Burst:             cfg.Public.RateLimitBurst,
-	})
+	}, perMethod)
+
+	verifier := authn.New(cfg.Auth, tenantCache, tenant.ScopePublicIngest)
 
 	bounds := otlp.Bounds{
 		MaxBatchSize:                  cfg.Public.MaxBatchSize,
@@ -107,7 +119,7 @@ func runPublic(cfg *config.Root, log *slog.Logger) error {
 		MaxTimestampSkewFuture:        cfg.Public.MaxTimestampSkewFuture,
 	}
 
-	srv := otlp.NewServer(tenantCache, schemaLoader, storage.NewWriter(pool), bounds, limiter, log)
+	srv := otlp.NewServer(verifier, schemaLoader, storage.NewWriter(pool), bounds, limiter, log)
 
 	grpcServer := grpc.NewServer()
 	srv.RegisterGRPC(grpcServer)

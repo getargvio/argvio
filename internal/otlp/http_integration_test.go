@@ -16,6 +16,8 @@ import (
 	"go.opentelemetry.io/collector/pdata/ptrace/ptraceotlp"
 
 	"github.com/getargvio/argvio/internal/allowlist"
+	"github.com/getargvio/argvio/internal/authn"
+	"github.com/getargvio/argvio/internal/config"
 	"github.com/getargvio/argvio/internal/consent"
 	"github.com/getargvio/argvio/internal/ratelimit"
 	"github.com/getargvio/argvio/internal/storage"
@@ -60,8 +62,9 @@ func TestHTTPTracesEndToEnd_Live(t *testing.T) {
 	}
 
 	cache := tenant.NewCache(store, time.Minute)
-	limiter := ratelimit.New(ratelimit.Defaults{RequestsPerSecond: 1000, BytesPerSecond: 100_000_000, Burst: 1000})
-	srv := NewServer(cache, loader, storage.NewWriter(pool), testBounds(), limiter, testLog)
+	limiter := ratelimit.New(ratelimit.Defaults{RequestsPerSecond: 1000, BytesPerSecond: 100_000_000, Burst: 1000}, nil)
+	verifier := authn.New(config.AuthConfig{Methods: []config.AuthMethod{config.AuthMethodAPIKey}}, cache, tenant.ScopePublicIngest)
+	srv := NewServer(verifier, loader, storage.NewWriter(pool), testBounds(), limiter, testLog)
 
 	ts := httptest.NewServer(srv.HTTPHandler())
 	defer ts.Close()
@@ -91,7 +94,7 @@ func TestHTTPTracesEndToEnd_Live(t *testing.T) {
 
 	httpReq, _ := http.NewRequest("POST", ts.URL+"/v1/traces", bytes.NewReader(body))
 	httpReq.Header.Set("Content-Type", "application/x-protobuf")
-	httpReq.Header.Set(APIKeyHeader, rawKey)
+	httpReq.Header.Set(CredentialHeader, rawKey)
 
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
@@ -117,7 +120,7 @@ func TestHTTPTracesEndToEnd_Live(t *testing.T) {
 	// Bad API key -> 401, no data written.
 	httpReq2, _ := http.NewRequest("POST", ts.URL+"/v1/traces", bytes.NewReader(body))
 	httpReq2.Header.Set("Content-Type", "application/x-protobuf")
-	httpReq2.Header.Set(APIKeyHeader, "totally-bogus-key")
+	httpReq2.Header.Set(CredentialHeader, "totally-bogus-key")
 	resp2, err := http.DefaultClient.Do(httpReq2)
 	if err != nil {
 		t.Fatalf("http request 2: %v", err)

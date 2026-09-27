@@ -51,12 +51,22 @@ at that version (see `go.mod`).
 Request pipeline (`internal/otlp`), every stage assuming a hostile or buggy
 client:
 
-1. **Auth** (`internal/otlp/core.go`) — API key resolved via
-   `internal/tenant.Cache`, an in-memory TTL cache in front of Postgres
-   (`internal/tenant.Store`), so an unknown/revoked key is rejected before
-   any OTLP parsing happens and a retry storm never reaches Postgres.
-2. **Rate limiting** (`internal/ratelimit`) — per-tenant token buckets
-   (requests/sec and bytes/sec), checked immediately after auth.
+1. **Auth** (`internal/otlp/core.go`, via `internal/authn.Verifier`) —
+   accepts whichever of the globally-configured auth methods
+   (`internal/config.AuthConfig`, shared with `metrics` — see below) are
+   enabled: a scoped tenant API key (`internal/tenant.Cache`, an in-memory
+   TTL cache in front of Postgres) and/or a user JWT/OIDC token, so e.g. a
+   generic ingest key and a dashboard user's browser can both reach the
+   same ingest endpoint. Either way the caller's tenant is re-resolved
+   (not just trusted from a token claim) so an unknown/revoked key or a
+   suspended tenant is rejected before any OTLP parsing happens, and a
+   retry storm never reaches Postgres.
+2. **Rate limiting** (`internal/ratelimit`) — per-(tenant, auth method)
+   token buckets (requests/sec and bytes/sec), checked immediately after
+   auth. A JWT/OIDC-authenticated caller gets its own bucket and, if
+   configured (`public.jwt_rate_limit_*`), its own defaults — independent
+   from the api_key tier, since an end user's browser and a service's
+   ingest key don't scale the same way.
 3. **Layer 1: structural validation** (`internal/otlp/limits.go`,
    `attrs.go`) — batch size, attribute count/length, timestamp skew, all
    from config, not hardcoded. A batch-size violation rejects the whole
@@ -91,10 +101,17 @@ there is no method on `QueryBuilder` that can run without one, so tenant
 isolation is a type-system guarantee, not a code-review convention. See
 docs/schema.md for what's backing each query.
 
-Auth is JWT (dashboard-user session, HS256, `tenant_id` claim) or a scoped
-API key (`scope=metrics_query`, distinct from `public`'s ingest keys) —
-`internal/config.AuthMode`. Full endpoint/parameter/response reference:
-`openapi/openapi.yaml`.
+Auth accepts whichever of the same globally-configured methods
+(`internal/config.AuthConfig`, `auth.methods` — see `public`'s auth
+section above) are enabled, scoped here to a `scope=metrics_query` API key
+(distinct from `public`'s ingest keys) instead of `public_ingest`: a JWT
+(dashboard-user session, HS256, `tenant_id` claim), a scoped API key, or
+OIDC (a third-party identity provider — `internal/oidc` fetches its
+discovery document + JWKS and verifies the bearer token's signature,
+`iss`/`aud`/`exp`, and any required scopes; the token must still carry a
+`tenant_id` claim). `internal/authn.Verifier` is what actually resolves a
+request's identity for both servers. Full endpoint/parameter/response
+reference: `openapi/openapi.yaml`.
 
 ## OTLP spec version
 
