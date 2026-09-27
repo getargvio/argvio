@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/getargvio/argvio/internal/authn"
 	"github.com/getargvio/argvio/internal/config"
 	"github.com/getargvio/argvio/internal/storage"
 	"github.com/getargvio/argvio/internal/tenant"
@@ -25,10 +26,7 @@ import (
 // Server holds everything the HTTP handlers need. Construct via NewServer.
 type Server struct {
 	QB       *storage.QueryBuilder
-	Resolver tenant.Resolver // used only in AuthModeAPIKey
-
-	AuthMode      config.AuthMode
-	JWTSigningKey []byte
+	Verifier *authn.Verifier
 
 	MaxResultPageSize     int
 	DefaultResultPageSize int
@@ -41,15 +39,14 @@ type Server struct {
 	Log *slog.Logger
 }
 
-func NewServer(cfg config.MetricsConfig, qb *storage.QueryBuilder, resolver tenant.Resolver, openAPISpecPath string, log *slog.Logger) *Server {
+// NewServer wires the metrics query API.
+func NewServer(cfg config.MetricsConfig, authCfg config.AuthConfig, qb *storage.QueryBuilder, resolver tenant.Resolver, openAPISpecPath string, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Server{
 		QB:                    qb,
-		Resolver:              resolver,
-		AuthMode:              cfg.AuthMode,
-		JWTSigningKey:         []byte(cfg.JWTSigningKey),
+		Verifier:              authn.New(authCfg, resolver, tenant.ScopeMetricsQuery),
 		MaxResultPageSize:     cfg.MaxResultPageSize,
 		DefaultResultPageSize: cfg.DefaultResultPageSize,
 		MaxTimeRangeSpan:      cfg.MaxTimeRangeSpan,

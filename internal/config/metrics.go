@@ -2,25 +2,15 @@ package config
 
 import "time"
 
-// AuthMode selects how the metrics server authenticates callers.
-type AuthMode string
-
-const (
-	AuthModeJWT    AuthMode = "jwt"     // dashboard-user session/JWT
-	AuthModeAPIKey AuthMode = "api_key" // scoped tenant API key
-)
-
 // MetricsConfig configures the read-oriented query/analysis API. This
 // server is internal/trusted-tenant facing (docs/architecture.md) — the
 // auth model is looser than public's, but tenant isolation on every query
 // is still mandatory (internal/storage's query builder enforces that
-// structurally, not via config).
+// structurally, not via config). Authentication itself (which methods are
+// accepted) is global, not per-server — see AuthConfig.
 type MetricsConfig struct {
 	ListenAddr string    `koanf:"listen_addr"`
 	TLS        TLSConfig `koanf:"tls"`
-
-	AuthMode      AuthMode `koanf:"auth_mode"`
-	JWTSigningKey string   `koanf:"jwt_signing_key"` // HMAC secret; use a real KMS-backed key in production
 
 	QueryTimeout          time.Duration `koanf:"query_timeout"`
 	MaxResultPageSize     int           `koanf:"max_result_page_size"`
@@ -40,9 +30,6 @@ func metricsDefaults() map[string]any {
 	return map[string]any{
 		"metrics.listen_addr": "0.0.0.0:8080",
 		"metrics.tls.enabled": false,
-
-		"metrics.auth_mode":       "jwt",
-		"metrics.jwt_signing_key": "",
 
 		"metrics.query_timeout":            "10s",
 		"metrics.max_result_page_size":     1000,

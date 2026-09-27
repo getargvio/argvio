@@ -27,6 +27,7 @@ servers:
 security:
   - BearerJWT: []
   - BearerAPIKey: []
+  - BearerOIDC: []
 
 paths:
   /healthz:
@@ -487,6 +488,19 @@ components:
         `argvio apikey create --scope metrics_query`). Distinct from
         the public server's ingest keys (scope=public_ingest) — an ingest
         key is rejected here and vice versa.
+    BearerOIDC:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Token issued by a third-party OIDC provider (Auth0, Okta, Azure AD,
+        ...), configured via metrics.oidc.*. Verified against the
+        provider's published JWKS (fetched from its
+        /.well-known/openid-configuration document); must carry a
+        `tenant_id` claim, a standard `exp`, an `aud` matching
+        metrics.oidc.audience, and — if metrics.oidc.required_scopes is
+        set — a `scope` or `scp` claim containing every required scope.
+        Only asymmetric algorithms (RS*/PS*/ES*) are accepted.
 
   parameters:
     From:

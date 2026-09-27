@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Resolver is what the public/metrics servers depend on for API-key auth —
@@ -17,6 +19,9 @@ type Resolver interface {
 	// unexpected failures (e.g. Postgres unreachable) that callers should
 	// treat as "fail closed, reject the request" rather than "not found".
 	Resolve(ctx context.Context, rawKey, scope string) (*Resolved, bool, error)
+
+	// ResolveByTenantID resolves by a JWT/OIDC tenant_id claim instead of an API key.
+	ResolveByTenantID(ctx context.Context, tenantID uuid.UUID) (*Resolved, bool, error)
 }
 
 // Cache is an in-memory, TTL-based Resolver in front of a Store. It caches
@@ -81,6 +86,30 @@ func (c *Cache) Resolve(ctx context.Context, rawKey, scope string) (*Resolved, b
 	default:
 		// Do not cache infrastructure failures — a transient Postgres
 		// blip must not turn into a sticky false rejection.
+		return nil, false, err
+	}
+}
+
+// ResolveByTenantID implements Resolver, keyed separately from Resolve.
+func (c *Cache) ResolveByTenantID(ctx context.Context, tenantID uuid.UUID) (*Resolved, bool, error) {
+	key := "tid:" + tenantID.String()
+
+	c.mu.RLock()
+	entry, ok := c.entries[key]
+	c.mu.RUnlock()
+	if ok && time.Now().Before(entry.expiresAt) {
+		return entry.resolved, entry.found, nil
+	}
+
+	resolved, err := c.store.LookupByTenantID(ctx, tenantID)
+	switch {
+	case err == nil:
+		c.set(key, cacheEntry{resolved: resolved, found: true, expiresAt: time.Now().Add(c.ttl)})
+		return resolved, true, nil
+	case isNotFound(err):
+		c.set(key, cacheEntry{found: false, expiresAt: time.Now().Add(c.negTTL)})
+		return nil, false, nil
+	default:
 		return nil, false, err
 	}
 }

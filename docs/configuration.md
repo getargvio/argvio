@@ -9,6 +9,12 @@ Layering: **defaults → YAML config file(s) → environment variable overrides*
 | Key | Env var | Type | Default | Description |
 |---|---|---|---|---|
 | `log_level` | `ARGVIO_LOG_LEVEL` | string | `info` | Log level: debug, info, warn, error. |
+| `auth.methods` | `ARGVIO_AUTH__METHODS` | []string | `[api_key jwt]` | Which auth methods this deployment accepts, in any combination: api_key (scoped tenant API key), jwt (dashboard-user session, HS256, requires jwt_signing_key), oidc (third-party OIDC provider, requires oidc.issuer_url and oidc.audience). Global — shared by both the public and metrics servers; each still only accepts its own tenant API-key scope (public_ingest vs metrics_query). |
+| `auth.jwt_signing_key` | `ARGVIO_AUTH__JWT_SIGNING_KEY` | string | `` | HMAC secret for verifying jwt-method tokens. Required when auth.methods includes jwt. |
+| `auth.oidc.issuer_url` | `ARGVIO_AUTH__OIDC__ISSUER_URL` | string | `` | OIDC issuer URL (no trailing slash). Its /.well-known/openid-configuration and referenced JWKS are fetched (and cached) at request time. Required when auth.methods includes oidc. |
+| `auth.oidc.audience` | `ARGVIO_AUTH__OIDC__AUDIENCE` | string | `` | Expected `aud` claim on incoming tokens. Required when auth.methods includes oidc. |
+| `auth.oidc.required_scopes` | `ARGVIO_AUTH__OIDC__REQUIRED_SCOPES` | []string | `[]` | OAuth2 scopes that must all be present (via the `scope` or `scp` claim) for a token to be accepted. Empty means no scope requirement. |
+| `auth.oidc.jwks_cache_ttl` | `ARGVIO_AUTH__OIDC__JWKS_CACHE_TTL` | duration | `15m` | How long a fetched JWKS is cached before being refreshed. An unrecognized `kid` always triggers one immediate refresh regardless of this TTL (to pick up key rotation without waiting). |
 | `public.grpc_listen_addr` | `ARGVIO_PUBLIC__GRPC_LISTEN_ADDR` | string | `0.0.0.0:4317` | OTLP/gRPC listen address. |
 | `public.http_listen_addr` | `ARGVIO_PUBLIC__HTTP_LISTEN_ADDR` | string | `0.0.0.0:4318` | OTLP/HTTP listen address. |
 | `public.tls.enabled` | `ARGVIO_PUBLIC__TLS__ENABLED` | bool | `false` | Enable TLS on both listeners. |
@@ -20,10 +26,13 @@ Layering: **defaults → YAML config file(s) → environment variable overrides*
 | `public.max_attribute_string_value_length` | `ARGVIO_PUBLIC__MAX_ATTRIBUTE_STRING_VALUE_LENGTH` | int | `4096` | Max string attribute value length in bytes. Longer values are dropped (record kept). |
 | `public.max_timestamp_skew_past` | `ARGVIO_PUBLIC__MAX_TIMESTAMP_SKEW_PAST` | duration | `24h` | Reject a record whose timestamp is older than now minus this. |
 | `public.max_timestamp_skew_future` | `ARGVIO_PUBLIC__MAX_TIMESTAMP_SKEW_FUTURE` | duration | `5m` | Reject a record whose timestamp is later than now plus this. |
-| `public.api_key_cache_ttl` | `ARGVIO_PUBLIC__API_KEY_CACHE_TTL` | duration | `60s` | TTL for the in-memory API-key resolution cache (positive and negative results). |
-| `public.rate_limit_requests_per_second` | `ARGVIO_PUBLIC__RATE_LIMIT_REQUESTS_PER_SECOND` | float | `200` | Default per-tenant request rate limit (token bucket). Overridable per tenant in tenant_config. |
-| `public.rate_limit_bytes_per_second` | `ARGVIO_PUBLIC__RATE_LIMIT_BYTES_PER_SECOND` | float | `5000000` | Default per-tenant byte-rate limit. Overridable per tenant. |
-| `public.rate_limit_burst` | `ARGVIO_PUBLIC__RATE_LIMIT_BURST` | int | `400` | Default per-tenant request-burst size. Overridable per tenant. |
+| `public.api_key_cache_ttl` | `ARGVIO_PUBLIC__API_KEY_CACHE_TTL` | duration | `60s` | TTL for the in-memory tenant identity resolution cache — both API-key lookups and the tenant lookup a jwt/oidc caller's tenant_id claim resolves to (positive and negative results). |
+| `public.rate_limit_requests_per_second` | `ARGVIO_PUBLIC__RATE_LIMIT_REQUESTS_PER_SECOND` | float | `200` | Default request rate limit (token bucket) for api_key-authenticated requests. Overridable per tenant in tenant_config. |
+| `public.rate_limit_bytes_per_second` | `ARGVIO_PUBLIC__RATE_LIMIT_BYTES_PER_SECOND` | float | `5000000` | Default byte-rate limit for api_key-authenticated requests. Overridable per tenant. |
+| `public.rate_limit_burst` | `ARGVIO_PUBLIC__RATE_LIMIT_BURST` | int | `400` | Default request-burst size for api_key-authenticated requests. Overridable per tenant. |
+| `public.jwt_rate_limit_requests_per_second` | `ARGVIO_PUBLIC__JWT_RATE_LIMIT_REQUESTS_PER_SECOND` | float | `0` | Request rate limit for jwt/oidc-authenticated requests. 0 (default) means "use rate_limit_requests_per_second instead". Overridable per tenant in tenant_config. |
+| `public.jwt_rate_limit_bytes_per_second` | `ARGVIO_PUBLIC__JWT_RATE_LIMIT_BYTES_PER_SECOND` | float | `0` | Byte-rate limit for jwt/oidc-authenticated requests. 0 (default) means "use rate_limit_bytes_per_second instead". |
+| `public.jwt_rate_limit_burst` | `ARGVIO_PUBLIC__JWT_RATE_LIMIT_BURST` | int | `0` | Request-burst size for jwt/oidc-authenticated requests. 0 (default) means "use rate_limit_burst instead". |
 | `public.allowlist_schema_path` | `ARGVIO_PUBLIC__ALLOWLIST_SCHEMA_PATH` | string | `schema/allowlist/v1.yaml` | Path to the versioned allowlist/tier schema YAML (see docs/allowlist.md). |
 | `public.allowlist_hot_reload` | `ARGVIO_PUBLIC__ALLOWLIST_HOT_RELOAD` | bool | `true` | Watch allowlist_schema_path and hot-reload on change without a restart. |
 | `public.shutdown_grace_period` | `ARGVIO_PUBLIC__SHUTDOWN_GRACE_PERIOD` | duration | `15s` | Graceful-shutdown timeout for the HTTP listener on SIGTERM/SIGINT (gRPC uses GracefulStop with no separate timeout). |
@@ -48,12 +57,16 @@ Layering: **defaults → YAML config file(s) → environment variable overrides*
 | Key | Env var | Type | Default | Description |
 |---|---|---|---|---|
 | `log_level` | `ARGVIO_LOG_LEVEL` | string | `info` | Log level: debug, info, warn, error. |
+| `auth.methods` | `ARGVIO_AUTH__METHODS` | []string | `[api_key jwt]` | Which auth methods this deployment accepts, in any combination: api_key (scoped tenant API key), jwt (dashboard-user session, HS256, requires jwt_signing_key), oidc (third-party OIDC provider, requires oidc.issuer_url and oidc.audience). Global — shared by both the public and metrics servers; each still only accepts its own tenant API-key scope (public_ingest vs metrics_query). |
+| `auth.jwt_signing_key` | `ARGVIO_AUTH__JWT_SIGNING_KEY` | string | `` | HMAC secret for verifying jwt-method tokens. Required when auth.methods includes jwt. |
+| `auth.oidc.issuer_url` | `ARGVIO_AUTH__OIDC__ISSUER_URL` | string | `` | OIDC issuer URL (no trailing slash). Its /.well-known/openid-configuration and referenced JWKS are fetched (and cached) at request time. Required when auth.methods includes oidc. |
+| `auth.oidc.audience` | `ARGVIO_AUTH__OIDC__AUDIENCE` | string | `` | Expected `aud` claim on incoming tokens. Required when auth.methods includes oidc. |
+| `auth.oidc.required_scopes` | `ARGVIO_AUTH__OIDC__REQUIRED_SCOPES` | []string | `[]` | OAuth2 scopes that must all be present (via the `scope` or `scp` claim) for a token to be accepted. Empty means no scope requirement. |
+| `auth.oidc.jwks_cache_ttl` | `ARGVIO_AUTH__OIDC__JWKS_CACHE_TTL` | duration | `15m` | How long a fetched JWKS is cached before being refreshed. An unrecognized `kid` always triggers one immediate refresh regardless of this TTL (to pick up key rotation without waiting). |
 | `metrics.listen_addr` | `ARGVIO_METRICS__LISTEN_ADDR` | string | `0.0.0.0:8080` | Metrics REST API listen address. |
 | `metrics.tls.enabled` | `ARGVIO_METRICS__TLS__ENABLED` | bool | `false` | Enable TLS on the listener. |
 | `metrics.tls.cert_file` | `ARGVIO_METRICS__TLS__CERT_FILE` | string | `` | PEM certificate path (required if tls.enabled). |
 | `metrics.tls.key_file` | `ARGVIO_METRICS__TLS__KEY_FILE` | string | `` | PEM private key path (required if tls.enabled). |
-| `metrics.auth_mode` | `ARGVIO_METRICS__AUTH_MODE` | string | `jwt` | jwt (dashboard-user session, HS256, requires jwt_signing_key) or api_key (scoped API key, scope=metrics_query). |
-| `metrics.jwt_signing_key` | `ARGVIO_METRICS__JWT_SIGNING_KEY` | string | `` | HMAC secret for verifying dashboard JWTs. Required when auth_mode=jwt. |
 | `metrics.query_timeout` | `ARGVIO_METRICS__QUERY_TIMEOUT` | duration | `10s` | Per-query server-side timeout. |
 | `metrics.max_result_page_size` | `ARGVIO_METRICS__MAX_RESULT_PAGE_SIZE` | int | `1000` | Hard ceiling on ?limit=; requests above this are clamped. |
 | `metrics.default_result_page_size` | `ARGVIO_METRICS__DEFAULT_RESULT_PAGE_SIZE` | int | `100` | ?limit= value used when the caller omits it. |

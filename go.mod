@@ -3,6 +3,7 @@ module github.com/getargvio/argvio
 go 1.27.0
 
 require (
+	github.com/MicahParks/keyfunc/v3 v3.8.2
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/go-viper/mapstructure/v2 v2.5.0
@@ -25,6 +26,7 @@ require (
 )
 
 require (
+	github.com/MicahParks/jwkset v0.11.3 // indirect
 	github.com/hashicorp/go-version v1.9.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6 // indirect
