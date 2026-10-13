@@ -46,6 +46,12 @@ services:
       ARGVIO_PUBLIC__GRPC_LISTEN_ADDR: 0.0.0.0:4317
       ARGVIO_PUBLIC__HTTP_LISTEN_ADDR: 0.0.0.0:4318
       ARGVIO_PUBLIC__ALLOWLIST_SCHEMA_PATH: /app/schema/allowlist/v1.yaml
+    healthcheck:
+      test: ["CMD", "/app/argvio", "healthcheck", "public"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -62,6 +68,12 @@ services:
       ARGVIO_METRICS__LISTEN_ADDR: 0.0.0.0:8080
       ARGVIO_METRICS__JWT_SIGNING_KEY: dev-only-signing-key-change-me
       ARGVIO_METRICS__DEV_MODE: "true"
+    healthcheck:
+      test: ["CMD", "/app/argvio", "healthcheck", "metrics"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     depends_on:
       migrate:
         condition: service_completed_successfully

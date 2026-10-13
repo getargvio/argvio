@@ -36,6 +36,8 @@ ory/hydra's single `hydra.yml`.
   generated from the config structs.
 - [`docs/running-locally.md`](docs/running-locally.md) — docker compose,
   migrations, seeding a tenant, sending a test OTLP payload.
+- [`docs/healthcheck.md`](docs/healthcheck.md) — health endpoints and how
+  to probe them (Kubernetes, compose).
 - [`docs/otel-collector.md`](docs/otel-collector.md) — fan out an OTel
   Collector to Argvio and another backend at the same time.
 - [`openapi/openapi.yaml`](openapi/openapi.yaml) — the `metrics` server's

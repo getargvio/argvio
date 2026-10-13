@@ -41,6 +41,7 @@ func NewRootCommand() *cobra.Command {
 
 	root.AddCommand(
 		newServeCommand(),
+		newHealthcheckCommand(),
 		newMigrateCommand(),
 		newTenantCommand(),
 		newAPIKeyCommand(),
