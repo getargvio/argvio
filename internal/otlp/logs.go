@@ -69,6 +69,7 @@ func (p *Pipeline) ProcessLogs(ctx context.Context, ld plog.Logs) (accepted, rej
 		if _, werr := p.Writer.InsertLogs(ctx, rows); werr != nil {
 			return 0, int64(ld.LogRecordCount()), "", werr
 		}
+		p.trackInstalls(ctx, rows)
 	}
 	return accepted, rejected, rejectionSample, nil
 }
@@ -123,5 +124,22 @@ func (p *Pipeline) buildLogRow(rec plog.LogRecord, scope pcommon.Instrumentation
 		ScopeVersion:       strPtrOrNil(scope.Version()),
 		ResourceAttributes: resourceJSON,
 		LogAttributes:      logJSON,
+	}
+}
+
+// trackInstalls folds the batch's install-bearing records into the installs
+// table. The logs are already stored by now, so a failure here is logged and
+// not returned: rejecting the export would make the client retry (and
+// duplicate) telemetry that was in fact accepted. `argvio installs backfill`
+// rebuilds the table from stored logs if it ever falls behind.
+func (p *Pipeline) trackInstalls(ctx context.Context, rows []storage.LogRow) {
+	var events []storage.InstallEvent
+	for _, r := range rows {
+		if e, ok := storage.InstallEventFromLog(r); ok {
+			events = append(events, e)
+		}
+	}
+	if err := p.Writer.TrackInstalls(ctx, events); err != nil {
+		p.Log.Error("otlp: tracking installs failed", "error", err, "tenant_id", p.tenantUUID())
 	}
 }

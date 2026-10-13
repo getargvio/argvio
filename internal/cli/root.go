@@ -47,6 +47,7 @@ func NewRootCommand() *cobra.Command {
 		newAPIKeyCommand(),
 		newPoliciesCommand(),
 		newRetentionCommand(),
+		newInstallsCommand(),
 	)
 
 	return root

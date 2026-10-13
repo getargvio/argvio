@@ -57,6 +57,12 @@ type Filters struct {
 	// there is no injection surface via attribute filter values regardless
 	// of what a tenant's dashboard user types in.
 	Attrs map[string]string
+	// AttrContains keeps rows whose attribute value contains the given
+	// substring (case-sensitive); AttrIn keeps rows whose attribute value
+	// equals any of the listed values. Same binding rules and AND-across-
+	// keys semantics as Attrs.
+	AttrContains map[string]string
+	AttrIn       map[string][]string
 
 	Limit  int
 	Offset int
@@ -109,6 +115,25 @@ func (pb *predicateBuilder) addAttrEquals(jsonCol string, attrs map[string]strin
 	}
 }
 
+func (pb *predicateBuilder) addAttrContains(jsonCol string, attrs map[string]string) {
+	for k, v := range attrs {
+		pb.args = append(pb.args, k, v)
+		keyIdx := len(pb.args) - 1
+		valIdx := len(pb.args)
+		// strpos rather than LIKE so %, _ and \ in v need no escaping.
+		pb.clauses = append(pb.clauses, fmt.Sprintf("strpos(%s ->> $%d, $%d) > 0", jsonCol, keyIdx, valIdx))
+	}
+}
+
+func (pb *predicateBuilder) addAttrIn(jsonCol string, attrs map[string][]string) {
+	for k, vs := range attrs {
+		pb.args = append(pb.args, k, vs)
+		keyIdx := len(pb.args) - 1
+		valIdx := len(pb.args)
+		pb.clauses = append(pb.clauses, fmt.Sprintf("(%s ->> $%d) = ANY($%d)", jsonCol, keyIdx, valIdx))
+	}
+}
+
 func (pb *predicateBuilder) where() string {
 	return strings.Join(pb.clauses, " AND ")
 }
@@ -156,6 +181,8 @@ func (q *QueryBuilder) ListTraces(ctx context.Context, scope TenantScope, f Filt
 	pb.addIfNotNilI32("exit_code", f.ExitCode)
 	pb.addIfNotNilBool("is_ci", f.IsCI)
 	pb.addAttrEquals("span_attributes", f.Attrs)
+	pb.addAttrContains("span_attributes", f.AttrContains)
+	pb.addAttrIn("span_attributes", f.AttrIn)
 
 	limit := clampLimit(f.Limit)
 	limitPh := pb.nextPlaceholder(limit)

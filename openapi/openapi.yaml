@@ -63,6 +63,8 @@ paths:
         - $ref: "#/components/parameters/ExitCode"
         - $ref: "#/components/parameters/IsCI"
         - $ref: "#/components/parameters/AttrFilter"
+        - $ref: "#/components/parameters/AttrContainsFilter"
+        - $ref: "#/components/parameters/AttrInFilter"
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Offset"
       responses:
@@ -335,6 +337,394 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /v1/metrics/error-types:
+    get:
+      summary: Error counts per error category, per command, time-bucketed
+      description: >
+        Distribution of the coarse, vendor-assigned error category
+        (user, validation, network, auth, internal, timeout, canceled,
+        unknown) carried by cli.error.raised events. Backs the network-vs-local
+        and timeout views. Counts only commands whose SDK emitted that event,
+        which requires a high enough consent tier, so totals are lower than
+        /v1/metrics/error-rate. Reads raw logs, so it is bounded by log
+        retention. exit_code and attr.* filters do not apply.
+      operationId: errorTypes
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/Command"
+        - $ref: "#/components/parameters/IsCI"
+        - $ref: "#/components/parameters/Bucket"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Per-bucket, per-command, per-error-type counts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ErrorTypePoint"
+              example:
+                data:
+                  - bucket: "2026-08-12T00:00:00Z"
+                    command_name: "deploy"
+                    error_type: "network"
+                    error_count: 4
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/metrics/friction:
+    get:
+      summary: Help views and interrupted runs per command, time-bucketed
+      description: >
+        Signals that a command is hard to use, next to its invocation count so
+        rates can be computed. help_views counts cli.help.viewed events (raw
+        logs, bounded by log retention) and can be non-zero for a command
+        with no invocations. interrupted_count counts invocations that exited
+        130 (SIGINT, i.e. Ctrl+C); it is a lower bound, since a CLI is not
+        required to exit 130 when interrupted. exit_code and attr.* filters do
+        not apply.
+      operationId: friction
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/Command"
+        - $ref: "#/components/parameters/IsCI"
+        - $ref: "#/components/parameters/Bucket"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Per-bucket, per-command friction counts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/FrictionPoint"
+              example:
+                data:
+                  - bucket: "2026-08-12T00:00:00Z"
+                    command_name: "deploy"
+                    invocation_count: 120
+                    help_views: 18
+                    interrupted_count: 3
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/metrics/install-funnel:
+    get:
+      summary: "Install funnel (first seen, ran a command, first success), by cohort"
+      description: >
+        Of the installs first seen in each bucket, how many have since completed a
+        command and how many have had a command exit 0. Later stages are counted
+        whenever they happened, even after the window, so recent cohorts are still
+        maturing.
+        Install-level, so only installs that reported a cli.install_id (basic
+        consent tier or above) appear; see /v1/metrics/install-coverage for how
+        much traffic that is. Installs are grouped by the bucket they were first
+        seen in, and the window applies to that first sighting. cli_version means
+        "first seen on this version"; os and arch are the install's most recent
+        values; command and is_ci filters do not apply. Install state is purged
+        once an install has not been seen for the tenant's logs retention, so an
+        install returning after that counts as new.
+      operationId: installFunnel
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/InstallBucket"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: One row per bucket (per version pair for version-changes).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/FunnelPoint"
+              example:
+                data:
+                  - bucket: "2026-08-10T00:00:00Z"
+                    installs: 120
+                    ran_command: 97
+                    succeeded: 71
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/metrics/install-activation:
+    get:
+      summary: Time from first seen to first successful command, by cohort
+      description: >
+        Per cohort bucket: the cohort size, how many installs have activated
+        (first command exited 0), and p50/p90 seconds from first sighting to first
+        success. Percentiles cover activated installs only, so they describe how
+        fast the successful ones were, not how long the rest will take; compare
+        activated_count with cohort_size. They are null when nobody has activated.
+        Install-level, so only installs that reported a cli.install_id (basic
+        consent tier or above) appear; see /v1/metrics/install-coverage for how
+        much traffic that is. Installs are grouped by the bucket they were first
+        seen in, and the window applies to that first sighting. cli_version means
+        "first seen on this version"; os and arch are the install's most recent
+        values; command and is_ci filters do not apply. Install state is purged
+        once an install has not been seen for the tenant's logs retention, so an
+        install returning after that counts as new.
+      operationId: installActivation
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/InstallBucket"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: One row per bucket (per version pair for version-changes).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ActivationPoint"
+              example:
+                data:
+                  - bucket: "2026-08-10T00:00:00Z"
+                    cohort_size: 120
+                    activated_count: 71
+                    p50_seconds: 42.5
+                    p90_seconds: 3600
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/metrics/install-methods:
+    get:
+      summary: "Installs by install method, by cohort"
+      description: >
+        Of the installs first seen in each bucket, how many report each install
+        method (brew, npm, curl, binary, ...). The method is supplied by the CLI
+        vendor through the SDK's install-method option, so installs that never
+        reported one, including everything seen before the vendor set it, are
+        grouped under a null install_method. Install-level, so only installs that
+        reported a cli.install_id (basic consent tier or above) appear; see
+        /v1/metrics/install-coverage. The window applies to an install's first
+        sighting; cli_version means "first seen on this version"; os and arch are
+        the install's most recent values; command and is_ci filters do not apply.
+      operationId: installMethods
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/InstallBucket"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: One row per bucket (per bucket and install method for install-methods).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/InstallMethodPoint"
+              example:
+                data:
+                  - bucket: "2026-08-10T00:00:00Z"
+                    install_method: "brew"
+                    installs: 64
+                  - bucket: "2026-08-10T00:00:00Z"
+                    install_method: null
+                    installs: 12
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/metrics/new-vs-returning:
+    get:
+      summary: "Active installs split into new and returning, time-bucketed"
+      description: >
+        Distinct installs that started a session in each bucket, split by whether
+        the install was first seen in that same bucket (new) or earlier
+        (returning). Reads raw session logs, so it is bounded by log retention, and
+        installs with no install-state row (not yet backfilled, or purged after
+        install retention) are left out, so "new" means first seen within install
+        retention. Only sessions that reported a cli.install_id (basic consent tier
+        or above) count. Filters apply to the sessions themselves; command does not
+        apply.
+      operationId: newVsReturning
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/IsCI"
+        - $ref: "#/components/parameters/InstallBucket"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: One row per bucket (per bucket and install method for install-methods).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/NewReturningPoint"
+              example:
+                data:
+                  - bucket: "2026-08-10T00:00:00Z"
+                    new_installs: 48
+                    returning_installs: 212
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/metrics/version-changes:
+    get:
+      summary: Upgrades and downgrades between versions, time-bucketed
+      description: >
+        Installs observed moving from one CLI version to another, with direction
+        decided by semver comparison. Changes involving a version that is not
+        semver are not recorded. Only installs that reported a cli.install_id
+        appear. The window applies to when the change was observed; cli_version
+        filters on the version moved to, os and arch on the install's most recent
+        values; command and is_ci filters do not apply.
+      operationId: versionChanges
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/InstallBucket"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: One row per bucket (per version pair for version-changes).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/VersionChangePoint"
+              example:
+                data:
+                  - bucket: "2026-08-10T00:00:00Z"
+                    from_version: "1.4.0"
+                    to_version: "1.5.0"
+                    direction: upgrade
+                    changes: 31
+                    installs: 31
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/metrics/install-coverage:
+    get:
+      summary: Share of sessions that the install-based metrics can see
+      description: >
+        Per bucket: all session starts, and those carrying a cli.install_id (basic
+        consent tier or above). Divide to show how representative the funnel,
+        activation and version-change endpoints are. Reads raw logs, so it is
+        bounded by log retention. command and exit_code filters do not apply.
+      operationId: installCoverage
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/IsCI"
+        - $ref: "#/components/parameters/DailyBucket"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: One row per bucket (per version pair for version-changes).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CoveragePoint"
+              example:
+                data:
+                  - bucket: "2026-08-12T00:00:00Z"
+                    session_count: 800
+                    tracked_sessions: 560
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /v1/metrics/ci-split:
     get:
       summary: Command invocations split by CI vs. interactive, time-bucketed
@@ -578,6 +968,12 @@ components:
         Time-bucket granularity for endpoints backed by daily session data
         (no hour). week starts Monday; all boundaries are UTC.
       schema: { type: string, enum: [day, week, month], default: day }
+    InstallBucket:
+      name: bucket
+      in: query
+      required: false
+      description: Cohort or change granularity. week starts Monday; all boundaries are UTC.
+      schema: { type: string, enum: [day, week, month], default: week }
     RetentionBucket:
       name: bucket
       in: query
@@ -594,6 +990,27 @@ components:
         keys (ANDed together). Values are always bound as query parameters
         server-side — never string-concatenated into SQL — so arbitrary
         attribute values cannot be used for injection.
+      schema: { type: string }
+    AttrContainsFilter:
+      name: attr_contains.*
+      in: query
+      required: false
+      description: >
+        Substring filter against a record-level attribute, e.g.
+        `attr_contains.cli.ci_provider=github`. Case-sensitive; an empty
+        value is ignored. Repeatable with different keys; ANDed with every
+        other filter, including `attr.*` and `attr_in.*` on the same key.
+        Bound as a query parameter server-side, like `attr.*`.
+      schema: { type: string }
+    AttrInFilter:
+      name: attr_in.*
+      in: query
+      required: false
+      description: >
+        Set-membership filter against a record-level attribute, e.g.
+        `attr_in.cli.ci_provider=github_actions,gitlab_ci`. Accepts repeated
+        or comma-separated values (OR within the key); ANDed across keys and
+        with every other filter. Bound as a query parameter server-side.
       schema: { type: string }
     Limit:
       name: limit
@@ -674,6 +1091,79 @@ components:
         exit_code: { type: integer, nullable: true, description: "null when the client didn't report one" }
         invocation_count: { type: integer }
       required: [bucket, command_name, exit_code, invocation_count]
+
+    ErrorTypePoint:
+      type: object
+      properties:
+        bucket: { type: string, format: date-time }
+        command_name: { type: string, nullable: true }
+        error_type: { type: string, nullable: true, description: "null when the event carried no category" }
+        error_count: { type: integer }
+      required: [bucket, command_name, error_type, error_count]
+
+    FrictionPoint:
+      type: object
+      properties:
+        bucket: { type: string, format: date-time }
+        command_name: { type: string, nullable: true }
+        invocation_count: { type: integer }
+        help_views: { type: integer }
+        interrupted_count: { type: integer, description: "Invocations that exited 130 (SIGINT); a lower bound" }
+      required: [bucket, command_name, invocation_count, help_views, interrupted_count]
+
+    FunnelPoint:
+      type: object
+      properties:
+        bucket: { type: string, format: date-time }
+        installs: { type: integer }
+        ran_command: { type: integer }
+        succeeded: { type: integer }
+      required: [bucket, installs, ran_command, succeeded]
+
+    ActivationPoint:
+      type: object
+      properties:
+        bucket: { type: string, format: date-time }
+        cohort_size: { type: integer }
+        activated_count: { type: integer }
+        p50_seconds: { type: number, nullable: true }
+        p90_seconds: { type: number, nullable: true }
+      required: [bucket, cohort_size, activated_count, p50_seconds, p90_seconds]
+
+    VersionChangePoint:
+      type: object
+      properties:
+        bucket: { type: string, format: date-time }
+        from_version: { type: string }
+        to_version: { type: string }
+        direction: { type: string, enum: [upgrade, downgrade] }
+        changes: { type: integer }
+        installs: { type: integer, description: "Distinct installs that made this change in the bucket" }
+      required: [bucket, from_version, to_version, direction, changes, installs]
+
+    InstallMethodPoint:
+      type: object
+      properties:
+        bucket: { type: string, format: date-time }
+        install_method: { type: string, nullable: true, description: "null for installs that never reported a method" }
+        installs: { type: integer }
+      required: [bucket, install_method, installs]
+
+    NewReturningPoint:
+      type: object
+      properties:
+        bucket: { type: string, format: date-time }
+        new_installs: { type: integer, description: "Active installs first seen in this bucket" }
+        returning_installs: { type: integer, description: "Active installs first seen in an earlier bucket" }
+      required: [bucket, new_installs, returning_installs]
+
+    CoveragePoint:
+      type: object
+      properties:
+        bucket: { type: string, format: date-time }
+        session_count: { type: integer }
+        tracked_sessions: { type: integer, description: "Sessions that carried a cli.install_id" }
+      required: [bucket, session_count, tracked_sessions]
 
     CISplitPoint:
       type: object

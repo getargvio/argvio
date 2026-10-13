@@ -15,6 +15,8 @@ Plain (non-hypertable) tables — low volume, read on every ingest request
 |---|---|
 | `tenants` | Identity: `id`, `slug`, `name`, `status` (active/suspended). |
 | `api_keys` | `key_hash` (SHA-256; the raw key is shown once at creation and never stored), `key_prefix` (for admin display), `scope` (`public_ingest` or `metrics_query` — an ingest key cannot authenticate against `metrics`, and vice versa), `revoked_at`. |
+| `installs` (`migrations/0006`) | One row per `cli.install_id`: `first_seen`/`last_seen`, first and last CLI version, last os/arch, vendor-reported `install_method`, `first_command_at` and `first_success_at` (first `cli.command.completed`, and first with exit code 0). Maintained at ingest from `cli.session.started` and `cli.command.completed` logs (`internal/storage/installs.go`), so first-run, activation time and upgrades don't go wrong when raw logs age out. Only basic-tier-or-above records carry an install id, so anonymous sessions never appear. Purged by `argvio retention sweep` once `last_seen` passes the tenant's logs retention. |
+| `install_version_changes` | Append-only upgrade/downgrade log per install (`at`, `from_version`, `to_version`, `direction`), decided at ingest by comparing semver. Changes involving a version that doesn't parse as semver are not recorded. |
 | `tenant_config` | Runtime-tunable per-tenant overrides: `tier_ceiling`, `tier_enforcement_mode` (`strip`/`reject`), rate-limit overrides, retention-day overrides. One row per tenant, mutated via `argvio tenant config`, never via static config files. |
 
 `traces`/`logs`/`metrics` deliberately have **no foreign key** to
@@ -122,6 +124,25 @@ no time-bucketed rollup can answer without re-deriving it per query anyway.
 It's therefore bounded by raw log retention (an install older than that
 looks "new" the next time it's seen), not by any cagg's longer retention
 window.
+
+### Install state
+
+Ingest folds each logs batch into `installs` right after the logs are stored.
+A failure there is logged and does not fail the export (the logs are already
+committed, and a rejection would make the client retry and duplicate them).
+`argvio installs backfill [--days 90]` rebuilds the table from stored logs by
+replaying them oldest first through the same code; run it once after
+migrating to 0006. Rerunning is safe, but can't recover version changes older
+than what live ingest has since recorded.
+
+Events may arrive out of order: late ones only move `first_seen`/
+`first_version` earlier, and only events newer than the stored `last_seen`
+update `last_*` fields or record a version change.
+
+`argvio retention sweep` deletes installs whose `last_seen` is older than the
+tenant's `retention_logs_days`, or `--default-logs-days` (default 90, matching
+`storage.logs.retention_after`) for tenants without an override. An install
+that returns after that window is counted as new.
 
 ## Compression + retention policies (`migrations/0004`)
 

@@ -195,3 +195,68 @@ func TestQueryBuilder_Live(t *testing.T) {
 		}
 	})
 }
+
+func TestListTraces_AttrOperators_Live(t *testing.T) {
+	dsn := os.Getenv("ARGVIO_TEST_DSN")
+	if dsn == "" {
+		t.Skip("ARGVIO_TEST_DSN not set; skipping live attr operator test")
+	}
+	ctx := context.Background()
+	if err := MigrateUp(dsn); err != nil {
+		t.Fatalf("MigrateUp: %v", err)
+	}
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgxpool.New: %v", err)
+	}
+	defer pool.Close()
+
+	tenant := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO tenants (id, slug, name) VALUES ($1,$2,$3)`, tenant, tenant.String(), "t"); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	now := time.Now()
+	var rows []TraceRow
+	for i, provider := range []string{"github_actions", "gitlab_ci", "jenkins", "100%_local"} {
+		rows = append(rows, TraceRow{
+			Time: now.Add(-time.Duration(i) * time.Minute), TenantID: tenant,
+			TraceID: uuid.NewString(), SpanID: uuid.NewString(), SpanName: "cli.command.deploy",
+			StartTime: now, EndTime: now.Add(time.Millisecond), DurationMs: 1,
+			StatusCode: 1, ConsentTier: "anonymous",
+			SpanAttributes: Attrs{"cli.ci_provider": provider},
+		})
+	}
+	if _, err := NewWriter(pool).InsertTraces(ctx, rows); err != nil {
+		t.Fatalf("insert traces: %v", err)
+	}
+
+	qb := NewQueryBuilder(pool)
+	scope := TenantScope{tenantID: tenant}
+	tr := TimeRange{From: now.Add(-time.Hour), To: now.Add(time.Hour)}
+	cases := []struct {
+		name string
+		f    Filters
+		want int
+	}{
+		{"contains", Filters{AttrContains: map[string]string{"cli.ci_provider": "git"}}, 2},
+		{"contains is literal, not a LIKE pattern", Filters{AttrContains: map[string]string{"cli.ci_provider": "%"}}, 1},
+		{"in", Filters{AttrIn: map[string][]string{"cli.ci_provider": {"jenkins", "gitlab_ci", "nope"}}}, 2},
+		{"contains AND in", Filters{
+			AttrContains: map[string]string{"cli.ci_provider": "git"},
+			AttrIn:       map[string][]string{"cli.ci_provider": {"jenkins", "gitlab_ci"}},
+		}, 1},
+		{"missing key matches nothing", Filters{AttrContains: map[string]string{"nope": "x"}}, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			c.f.Time, c.f.Limit = tr, 100
+			got, err := qb.ListTraces(ctx, scope, c.f)
+			if err != nil {
+				t.Fatalf("ListTraces: %v", err)
+			}
+			if len(got) != c.want {
+				t.Fatalf("got %d rows, want %d", len(got), c.want)
+			}
+		})
+	}
+}

@@ -91,8 +91,8 @@ dropped.
 | Tier | Adds |
 |---|---|
 | `anonymous` | Aggregate-only shape: `cli.command.name`, `cli.command.exit_code`, `cli.command.duration_ms`, `cli.version`, `cli.os`, `cli.arch`, `cli.is_ci`. |
-| `basic` | Opaque `cli.session_id`/`cli.install_id` (random UUIDs, not identity-linked), `cli.flag.names` (names only, not values), shell/terminal metadata. |
-| `full` | Error diagnostics (`cli.error.type`/`message`/`stacktrace`), the full allowlisted attribute set for allowed events. |
+| `basic` | Opaque `cli.session_id`/`cli.install_id` (random UUIDs, not identity-linked), `cli.flag.names` (names only, not values), shell/terminal metadata, and the coarse `cli.error.type` category. |
+| `full` | Error diagnostics (`cli.error.message`/`stacktrace`), the full allowlisted attribute set for allowed events. |
 | `optin_plus` | Fields marked `sensitive: true` explicitly: `cli.args.raw`, `cli.env.vars`, `cli.host.name`, `cli.user.name`, `cli.path.raw`. Only accepted if **both** the tenant's ceiling is `optin_plus` and the record itself declares it. |
 
 ## Worked example: adding a new supported log event
