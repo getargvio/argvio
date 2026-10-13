@@ -276,3 +276,53 @@ func TestProcessLogs_Live(t *testing.T) {
 		t.Errorf("expected body to be persisted at full tier, got %v", body)
 	}
 }
+
+func TestProcessLogs_TracksInstalls_Live(t *testing.T) {
+	pipeline, pool, tenantID := setupPipeline(t, "basic", consent.ModeStrip)
+	ctx := context.Background()
+	now := time.Now()
+
+	ld := plog.NewLogs()
+	rl := ld.ResourceLogs().AppendEmpty()
+	rl.Resource().Attributes().PutStr("cli.analytics.tier", "basic")
+	rl.Resource().Attributes().PutStr("cli.version", "1.2.3")
+	rl.Resource().Attributes().PutStr("cli.os", "linux")
+	rl.Resource().Attributes().PutStr("cli.arch", "amd64")
+	records := rl.ScopeLogs().AppendEmpty().LogRecords()
+
+	add := func(event string, at time.Time, attrs map[string]any) {
+		rec := records.AppendEmpty()
+		rec.SetEventName(event)
+		rec.SetTimestamp(pcommon.NewTimestampFromTime(at))
+		for k, v := range attrs {
+			switch x := v.(type) {
+			case string:
+				rec.Attributes().PutStr(k, x)
+			case int64:
+				rec.Attributes().PutInt(k, x)
+			}
+		}
+	}
+	add("cli.session.started", now.Add(-2*time.Minute), map[string]any{"cli.install_id": "install-1", "cli.install.method": "brew"})
+	add("cli.command.completed", now.Add(-time.Minute), map[string]any{"cli.command.name": "deploy", "cli.command.exit_code": int64(0), "cli.install_id": "install-1"})
+	add("cli.session.started", now.Add(-time.Minute), map[string]any{}) // no install id: not tracked
+	add("cli.help.viewed", now, map[string]any{"cli.command.name": "deploy"})
+
+	if _, rejected, _, err := pipeline.ProcessLogs(ctx, ld); err != nil || rejected != 0 {
+		t.Fatalf("ProcessLogs rejected=%d err=%v", rejected, err)
+	}
+
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM installs WHERE tenant_id = $1`, tenantID).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("installs rows = %d (%v), want 1", n, err)
+	}
+	var version, method string
+	var firstSuccess *time.Time
+	if err := pool.QueryRow(ctx, `SELECT last_version, install_method, first_success_at FROM installs WHERE tenant_id = $1 AND install_id = 'install-1'`, tenantID).
+		Scan(&version, &method, &firstSuccess); err != nil {
+		t.Fatalf("read install: %v", err)
+	}
+	if version != "1.2.3" || method != "brew" || firstSuccess == nil {
+		t.Errorf("install = version %q method %q first success %v", version, method, firstSuccess)
+	}
+}

@@ -47,9 +47,24 @@ func (s *Server) parseFilters(r *http.Request) (storage.Filters, error) {
 	}
 
 	f.Attrs = map[string]string{}
+	f.AttrContains = map[string]string{}
+	f.AttrIn = map[string][]string{}
 	for key, vals := range q {
-		if strings.HasPrefix(key, "attr.") && len(vals) > 0 {
-			f.Attrs[strings.TrimPrefix(key, "attr.")] = vals[0]
+		switch {
+		case strings.HasPrefix(key, "attr."):
+			if len(vals) > 0 {
+				f.Attrs[strings.TrimPrefix(key, "attr.")] = vals[0]
+			}
+		case strings.HasPrefix(key, "attr_contains."):
+			// An empty needle would match every row that has the key, so
+			// treat it as absent, like an empty multi-value param.
+			if len(vals) > 0 && vals[0] != "" {
+				f.AttrContains[strings.TrimPrefix(key, "attr_contains.")] = vals[0]
+			}
+		case strings.HasPrefix(key, "attr_in."):
+			if in := multiParam(q, key); len(in) > 0 {
+				f.AttrIn[strings.TrimPrefix(key, "attr_in.")] = in
+			}
 		}
 	}
 

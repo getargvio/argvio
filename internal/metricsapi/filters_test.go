@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/getargvio/argvio/internal/storage"
 )
@@ -54,5 +55,24 @@ func TestParseBucket(t *testing.T) {
 		if got != c.want {
 			t.Errorf("parseBucket(%q) = %q, want %q", c.query, got, c.want)
 		}
+	}
+}
+
+func TestParseFiltersAttrOperators(t *testing.T) {
+	s := &Server{MaxTimeRangeSpan: 24 * time.Hour, DefaultResultPageSize: 10, MaxResultPageSize: 100}
+	r := httptest.NewRequest("GET", "/?from=2026-01-01T00:00:00Z&to=2026-01-01T01:00:00Z"+
+		"&attr.a.b=x&attr_contains.c.d=git&attr_contains.e=&attr_in.f=p,q&attr_in.f=r&attr_in.g=", nil)
+	f, err := s.parseFilters(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Attrs["a.b"] != "x" || len(f.Attrs) != 1 {
+		t.Errorf("Attrs = %v", f.Attrs)
+	}
+	if f.AttrContains["c.d"] != "git" || len(f.AttrContains) != 1 {
+		t.Errorf("AttrContains = %v (empty needle must be dropped)", f.AttrContains)
+	}
+	if !slices.Equal(f.AttrIn["f"], []string{"p", "q", "r"}) || len(f.AttrIn) != 1 {
+		t.Errorf("AttrIn = %v (empty list must be dropped)", f.AttrIn)
 	}
 }

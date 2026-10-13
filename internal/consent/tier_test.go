@@ -157,3 +157,56 @@ func TestEvaluateEvent_StandardResourceAttributeAlwaysKept(t *testing.T) {
 		t.Errorf("service.name should always be kept as a standard resource attribute")
 	}
 }
+
+// The SDKs tie command outcomes, errors and session starts to the install
+// at basic tier and above (journey analytics are built from them), and
+// nothing identifying may survive at anonymous.
+func TestEvaluateEvent_JourneyAttributesByTier(t *testing.T) {
+	s := loadSchema(t)
+	cases := []struct {
+		event string
+		attrs map[string]any
+		// keys expected at basic; the same keys must all be dropped at anonymous
+		basicOnly []string
+		// keys kept at every tier
+		always []string
+	}{
+		{
+			"cli.command.completed",
+			map[string]any{"cli.command.name": "deploy", "cli.command.exit_code": 1, "cli.command.duration_ms": 12, "cli.session_id": "s", "cli.install_id": "i"},
+			[]string{"cli.session_id", "cli.install_id"},
+			[]string{"cli.command.name", "cli.command.exit_code", "cli.command.duration_ms"},
+		},
+		{
+			"cli.error.raised",
+			map[string]any{"cli.command.name": "deploy", "cli.error.type": "network", "cli.session_id": "s", "cli.install_id": "i"},
+			[]string{"cli.error.type", "cli.session_id", "cli.install_id"},
+			[]string{"cli.command.name"},
+		},
+		{
+			"cli.session.started",
+			map[string]any{"cli.session_id": "s", "cli.install_id": "i", "cli.install.method": "brew"},
+			[]string{"cli.session_id", "cli.install_id"},
+			[]string{"cli.install.method"},
+		},
+	}
+	for _, c := range cases {
+		def := logEventDef(s, c.event)
+		for tier, wantBasic := range map[string]bool{"basic": true, "anonymous": false} {
+			dec := EvaluateEvent(s, def, tier, tier, ModeStrip, c.attrs)
+			if !dec.Accepted {
+				t.Fatalf("%s at %s: rejected: %s", c.event, tier, dec.RejectReason)
+			}
+			for _, k := range c.basicOnly {
+				if _, kept := dec.KeptAttributes[k]; kept != wantBasic {
+					t.Errorf("%s at %s: %s kept = %v, want %v", c.event, tier, k, kept, wantBasic)
+				}
+			}
+			for _, k := range c.always {
+				if _, kept := dec.KeptAttributes[k]; !kept {
+					t.Errorf("%s at %s: %s should be kept at every tier", c.event, tier, k)
+				}
+			}
+		}
+	}
+}
