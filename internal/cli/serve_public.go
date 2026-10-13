@@ -31,7 +31,7 @@ import (
 // runs as a separate process from `serve metrics`.
 func newServePublicCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:   "public",
+		Use:   serverPublic,
 		Short: "Run the OTLP ingest server (gRPC + HTTP)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			root, err := config.Load(configPaths)

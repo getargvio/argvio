@@ -29,7 +29,7 @@ func newServeMetricsCommand() *cobra.Command {
 	var openAPIPath string
 
 	cmd := &cobra.Command{
-		Use:   "metrics",
+		Use:   serverMetrics,
 		Short: "Run the metrics query API",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			root, err := config.Load(configPaths)

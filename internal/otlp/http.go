@@ -104,9 +104,14 @@ func readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 
 // HTTPHandler returns the OTLP/HTTP mux: POST /v1/metrics, /v1/logs,
 // /v1/traces, each accepting application/x-protobuf or application/json
-// per the OTLP/HTTP spec, with matching-format responses.
+// per the OTLP/HTTP spec, with matching-format responses. Plus an
+// unauthenticated GET /healthz liveness probe (used by `argvio healthcheck
+// public`).
 func (s *Server) HTTPHandler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	})
 	mux.HandleFunc("POST /v1/metrics", s.handleMetricsHTTP)
 	mux.HandleFunc("POST /v1/logs", s.handleLogsHTTP)
 	mux.HandleFunc("POST /v1/traces", s.handleTracesHTTP)

@@ -4,6 +4,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Names of the two servers, shared by `serve <name>` and `healthcheck <name>`.
+const (
+	serverPublic  = "public"
+	serverMetrics = "metrics"
+)
+
 // newServeCommand groups the two long-lived servers under `argvio serve`,
 // mirroring ory/hydra's `hydra serve public|admin` — see docs/architecture.md
 // for why public and metrics stay independent processes/subcommands rather
