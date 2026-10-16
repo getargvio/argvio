@@ -16,6 +16,9 @@ import (
 	"github.com/getargvio/argvio/internal/consent"
 )
 
+// StatusActive is the Tenant.Status of a tenant allowed to use the service.
+const StatusActive = "active"
+
 // Tenant is a row from the tenants table.
 type Tenant struct {
 	ID     uuid.UUID
@@ -72,5 +75,23 @@ type Resolved struct {
 
 // Active reports whether the tenant is allowed to send/query data at all.
 func (r *Resolved) Active() bool {
-	return r.Tenant.Status == "active" && r.APIKey.RevokedAt == nil
+	return r.Tenant.Status == StatusActive && r.APIKey.RevokedAt == nil
+}
+
+// Member is a row from tenant_members: an OIDC identity's access to a tenant.
+type Member struct {
+	TenantID  uuid.UUID
+	Issuer    string
+	Subject   string
+	Role      string
+	CreatedAt time.Time
+}
+
+// DefaultMemberRole is the role a new membership gets when none is given.
+const DefaultMemberRole = "viewer"
+
+// Membership is one tenant an identity may use, with its role there.
+type Membership struct {
+	Tenant Tenant
+	Role   string
 }

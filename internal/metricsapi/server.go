@@ -33,6 +33,8 @@ type Server struct {
 	MaxTimeRangeSpan      time.Duration
 	QueryTimeout          time.Duration
 
+	CORS config.CORSConfig
+
 	DevMode         bool
 	OpenAPISpecPath string
 
@@ -51,6 +53,7 @@ func NewServer(cfg config.MetricsConfig, authCfg config.AuthConfig, qb *storage.
 		DefaultResultPageSize: cfg.DefaultResultPageSize,
 		MaxTimeRangeSpan:      cfg.MaxTimeRangeSpan,
 		QueryTimeout:          cfg.QueryTimeout,
+		CORS:                  cfg.CORS,
 		DevMode:               cfg.DevMode,
 		OpenAPISpecPath:       openAPISpecPath,
 		Log:                   log,

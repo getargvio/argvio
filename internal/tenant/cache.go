@@ -22,6 +22,10 @@ type Resolver interface {
 
 	// ResolveByTenantID resolves by a JWT/OIDC tenant_id claim instead of an API key.
 	ResolveByTenantID(ctx context.Context, tenantID uuid.UUID) (*Resolved, bool, error)
+
+	// Memberships lists the tenants a verified OIDC (issuer, subject) belongs
+	// to. An unknown identity yields an empty list, not an error.
+	Memberships(ctx context.Context, issuer, subject string) ([]Membership, error)
 }
 
 // Cache is an in-memory, TTL-based Resolver in front of a Store. It caches
@@ -38,9 +42,10 @@ type Cache struct {
 }
 
 type cacheEntry struct {
-	resolved  *Resolved
-	found     bool
-	expiresAt time.Time
+	resolved    *Resolved
+	found       bool
+	memberships []Membership
+	expiresAt   time.Time
 }
 
 // NewCache builds a Cache with the given positive-hit TTL. Negative results
@@ -112,6 +117,33 @@ func (c *Cache) ResolveByTenantID(ctx context.Context, tenantID uuid.UUID) (*Res
 	default:
 		return nil, false, err
 	}
+}
+
+// Memberships implements Resolver. Like the other lookups it caches an empty
+// result for the shorter negative TTL, so a membership just granted with
+// `argvio tenant member add` works quickly while a revoked one is honoured for
+// at most the positive TTL.
+func (c *Cache) Memberships(ctx context.Context, issuer, subject string) ([]Membership, error) {
+	sum := sha256.Sum256([]byte(issuer + "\x00" + subject))
+	key := "mem:" + hex.EncodeToString(sum[:])
+
+	c.mu.RLock()
+	entry, ok := c.entries[key]
+	c.mu.RUnlock()
+	if ok && time.Now().Before(entry.expiresAt) {
+		return entry.memberships, nil
+	}
+
+	ms, err := c.store.ListMemberships(ctx, issuer, subject)
+	if err != nil {
+		return nil, err // not cached: a Postgres blip must not stick
+	}
+	ttl := c.ttl
+	if len(ms) == 0 {
+		ttl = c.negTTL
+	}
+	c.set(key, cacheEntry{memberships: ms, expiresAt: time.Now().Add(ttl)})
+	return ms, nil
 }
 
 func (c *Cache) set(key string, e cacheEntry) {

@@ -109,6 +109,9 @@ func runPublic(cfg *config.Root, log *slog.Logger) error {
 	}, perMethod)
 
 	verifier := authn.New(cfg.Auth, tenantCache, tenant.ScopePublicIngest)
+	if err := verifier.CheckStartup(ctx); err != nil {
+		return fmt.Errorf("auth config: %w", err)
+	}
 
 	bounds := otlp.Bounds{
 		MaxBatchSize:                  cfg.Public.MaxBatchSize,

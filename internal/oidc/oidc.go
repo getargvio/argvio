@@ -1,19 +1,19 @@
-// Package oidc verifies bearer tokens against a third-party OIDC provider.
+// Package oidc verifies bearer tokens against a third-party OIDC provider:
+// JWT access tokens against its published JWKS, opaque ones by RFC 7662
+// introspection. It relies only on OIDC discovery metadata and the RFCs
+// (6750, 7519, 7662, 9068), nothing provider-specific.
 package oidc
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/MicahParks/keyfunc/v3"
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/sync/singleflight"
 )
 
 // allowedSigningMethods excludes "none" and HMAC to rule out algorithm-confusion attacks.
@@ -23,103 +23,99 @@ var allowedSigningMethods = []string{
 	"ES256", "ES384", "ES512",
 }
 
-type discovery struct {
-	Issuer  string `json:"issuer"`
-	JWKSURI string `json:"jwks_uri"`
-}
+const (
+	// clockSkewLeeway absorbs clock drift between us and the provider for
+	// exp/nbf, so a freshly minted token is not rejected as "not yet valid".
+	clockSkewLeeway = 30 * time.Second
 
-const maxDiscoveryBodyBytes = 1 << 20 // 1 MiB
+	// defaultUnknownKIDCooldown is the minimum gap between JWKS refreshes
+	// triggered by a token naming an unknown kid.
+	defaultUnknownKIDCooldown = 10 * time.Second
+)
 
 // Verifier validates bearer tokens issued by a single OIDC provider,
 // lazily fetching and caching discovery + JWKS.
 type Verifier struct {
+	// IssuerURL is compared exactly (no trailing-slash normalisation) against
+	// the discovery document's `issuer` and each token's `iss`.
 	IssuerURL      string
 	Audience       string
 	RequiredScopes []string
-	CacheTTL       time.Duration
-	HTTPClient     *http.Client
+	// CacheTTL is how long a fetched JWKS is trusted before a refresh.
+	CacheTTL   time.Duration
+	HTTPClient *http.Client
 
-	mu sync.Mutex
-	kf keyfunc.Keyfunc
+	// RequireAccessTokenTyp rejects a JWT whose header has a `typ` other than
+	// at+jwt (RFC 9068).
+	RequireAccessTokenTyp bool
+
+	// Introspection configures opaque-token verification (RFC 7662).
+	Introspection IntrospectionConfig
+
+	unknownKIDCooldown time.Duration
+	now                func() time.Time
+
+	metaMu     sync.RWMutex
+	meta       *discovery
+	metaFlight singleflight.Group
+
+	jwks        jwksCache
+	introCache  introspectionCache
+	introFlight singleflight.Group
 }
 
 func NewVerifier(issuerURL, audience string, requiredScopes []string, cacheTTL time.Duration) *Verifier {
 	return &Verifier{
-		IssuerURL:      strings.TrimSuffix(issuerURL, "/"),
-		Audience:       audience,
-		RequiredScopes: requiredScopes,
-		CacheTTL:       cacheTTL,
-		HTTPClient:     &http.Client{Timeout: 10 * time.Second},
+		IssuerURL:          issuerURL,
+		Audience:           audience,
+		RequiredScopes:     requiredScopes,
+		CacheTTL:           cacheTTL,
+		HTTPClient:         &http.Client{Timeout: fetchTimeout},
+		unknownKIDCooldown: defaultUnknownKIDCooldown,
+		now:                time.Now,
 	}
 }
 
-func (v *Verifier) client() *http.Client {
-	if v.HTTPClient != nil {
-		return v.HTTPClient
-	}
-	return http.DefaultClient
-}
-
-// keyfunc lazily discovers the provider's jwks_uri and builds a keyfunc.Keyfunc
-// backed by it, rejecting a discovery issuer that doesn't match v.IssuerURL.
-// The result is cached for the lifetime of the Verifier: the underlying
-// keyfunc.Keyfunc refreshes the JWKS itself on CacheTTL and on unknown kid.
-func (v *Verifier) ensureKeyfunc(ctx context.Context) (keyfunc.Keyfunc, error) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if v.kf != nil {
-		return v.kf, nil
-	}
-
-	var d discovery
-	if err := fetchJSON(ctx, v.client(), v.IssuerURL+"/.well-known/openid-configuration", &d); err != nil {
-		return nil, fmt.Errorf("oidc: fetching discovery document: %w", err)
-	}
-	if d.Issuer != v.IssuerURL {
-		return nil, fmt.Errorf("oidc: discovery issuer %q does not match configured issuer %q", d.Issuer, v.IssuerURL)
-	}
-	if d.JWKSURI == "" {
-		return nil, errors.New("oidc: discovery document has no jwks_uri")
-	}
-
-	kf, err := keyfunc.NewDefaultOverrideCtx(context.Background(), []string{d.JWKSURI}, keyfunc.Override{
-		Client:          v.client(),
-		RefreshInterval: v.CacheTTL,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("oidc: creating JWKS client: %w", err)
-	}
-	v.kf = kf
-	return kf, nil
-}
-
-func fetchJSON(ctx context.Context, client *http.Client, url string, dst any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status %d from %s", resp.StatusCode, url)
-	}
-	return json.NewDecoder(io.LimitReader(resp.Body, maxDiscoveryBodyBytes)).Decode(dst)
-}
-
+// Verify validates a JWT access token. Errors wrap exactly one of
+// ErrInvalidToken, ErrInsufficientScope (*ScopeError) or ErrProviderUnavailable.
 func (v *Verifier) Verify(ctx context.Context, rawToken string) (jwt.MapClaims, error) {
-	kf, err := v.ensureKeyfunc(ctx)
+	// Header checks first: they need no provider round trip, so a malformed
+	// or wrong-typed token is a 401 even while the provider is down.
+	header, err := peekHeader(rawToken)
 	if err != nil {
-		return nil, fmt.Errorf("oidc: resolving JWKS: %w", err)
+		return nil, err
+	}
+	if err := v.checkHeader(header); err != nil {
+		return nil, err
+	}
+
+	meta, err := v.discover(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	claims := jwt.MapClaims{}
-	_, err = jwt.ParseWithClaims(rawToken, claims, kf.KeyfuncCtx(ctx),
-		jwt.WithValidMethods(allowedSigningMethods), jwt.WithIssuer(v.IssuerURL), jwt.WithAudience(v.Audience))
+	_, err = jwt.NewParser(
+		jwt.WithValidMethods(allowedSigningMethods),
+		jwt.WithIssuer(v.IssuerURL),
+		jwt.WithAudience(v.Audience),
+		jwt.WithExpirationRequired(),
+		jwt.WithLeeway(clockSkewLeeway),
+		jwt.WithTimeFunc(v.now),
+	).ParseWithClaims(rawToken, claims, func(t *jwt.Token) (any, error) {
+		kid, _ := t.Header["kid"].(string)
+		alg, _ := t.Header["alg"].(string)
+		k, err := v.lookupKey(ctx, meta.JWKSURI, kid, alg)
+		if err != nil {
+			return nil, err
+		}
+		return k.key, nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("oidc: invalid token: %w", err)
+		if errors.Is(err, ErrProviderUnavailable) {
+			return nil, err
+		}
+		return nil, invalidf("%v", err)
 	}
 
 	if err := v.checkScopes(claims); err != nil {
@@ -128,7 +124,44 @@ func (v *Verifier) Verify(ctx context.Context, rawToken string) (jwt.MapClaims, 
 	return claims, nil
 }
 
-// checkScopes reads scopes from either the "scope" or "scp" (Azure AD) claim.
+// peekHeader decodes the unverified JOSE header.
+func peekHeader(rawToken string) (map[string]any, error) {
+	tok, _, err := jwt.NewParser().ParseUnverified(rawToken, jwt.MapClaims{})
+	if err != nil {
+		return nil, invalidf("malformed token: %v", err)
+	}
+	return tok.Header, nil
+}
+
+func (v *Verifier) checkHeader(header map[string]any) error {
+	alg, _ := header["alg"].(string)
+	allowed := false
+	for _, m := range allowedSigningMethods {
+		if m == alg {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return invalidf("signing algorithm %q is not accepted", alg)
+	}
+
+	// An ID token is not an access token; if the provider marks the type,
+	// insist on RFC 9068's at+jwt. A token with no `typ` at all is left to
+	// the audience check.
+	if typ, ok := header["typ"]; ok && v.RequireAccessTokenTyp {
+		s, _ := typ.(string)
+		// RFC 7515 §4.1.9: media types compare case-insensitively and the
+		// "application/" prefix is optional.
+		if strings.TrimPrefix(strings.ToLower(s), "application/") != "at+jwt" {
+			return invalidf("token typ %q is not at+jwt", s)
+		}
+	}
+	return nil
+}
+
+// checkScopes reads scopes from either the "scope" (RFC 6749/9068/7662, a
+// space-delimited string) or "scp" (array) claim.
 func (v *Verifier) checkScopes(claims jwt.MapClaims) error {
 	if len(v.RequiredScopes) == 0 {
 		return nil
@@ -139,11 +172,16 @@ func (v *Verifier) checkScopes(claims jwt.MapClaims) error {
 			granted[sc] = true
 		}
 	}
-	if arr, ok := claims["scp"].([]any); ok {
-		for _, sc := range arr {
+	switch scp := claims["scp"].(type) {
+	case []any:
+		for _, sc := range scp {
 			if s, ok := sc.(string); ok {
 				granted[s] = true
 			}
+		}
+	case string:
+		for _, sc := range strings.Fields(scp) {
+			granted[sc] = true
 		}
 	}
 
@@ -154,7 +192,7 @@ func (v *Verifier) checkScopes(claims jwt.MapClaims) error {
 		}
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("oidc: token missing required scope(s): %s", strings.Join(missing, ", "))
+		return &ScopeError{Missing: missing}
 	}
 	return nil
 }

@@ -35,14 +35,24 @@ type row struct {
 var descriptions = map[string]string{
 	"log_level": "Log level: debug, info, warn, error.",
 
-	"auth.methods": "Which auth methods this deployment accepts, in any combination: api_key (scoped tenant API key), jwt (dashboard-user session, HS256, requires jwt_signing_key), oidc (third-party OIDC provider, requires oidc.issuer_url and oidc.audience). Global — shared by both the public and metrics servers; each still only accepts its own tenant API-key scope (public_ingest vs metrics_query).",
+	"auth.methods": "Which auth methods this deployment accepts, in any combination: api_key (scoped tenant API key), jwt (dashboard-user session, HS256, requires jwt_signing_key), oidc (OAuth2 access tokens from a third-party OIDC provider, as JWTs or, with oidc.introspection, opaque tokens; requires oidc.issuer_url and oidc.audience). Global — shared by both the public and metrics servers; each still only accepts its own tenant API-key scope (public_ingest vs metrics_query). A token is routed by shape, not tried against each method: an `argv_` prefix is an API key, a three-part JWS is jwt (HS256) or oidc (asymmetric alg), and any other token is introspected if oidc.introspection.enabled, else treated as an API key.",
 
 	"auth.jwt_signing_key": "HMAC secret for verifying jwt-method tokens. Required when auth.methods includes jwt.",
 
-	"auth.oidc.issuer_url":      "OIDC issuer URL (no trailing slash). Its /.well-known/openid-configuration and referenced JWKS are fetched (and cached) at request time. Required when auth.methods includes oidc.",
-	"auth.oidc.audience":        "Expected `aud` claim on incoming tokens. Required when auth.methods includes oidc.",
-	"auth.oidc.required_scopes": "OAuth2 scopes that must all be present (via the `scope` or `scp` claim) for a token to be accepted. Empty means no scope requirement.",
-	"auth.oidc.jwks_cache_ttl":  "How long a fetched JWKS is cached before being refreshed. An unrecognized `kid` always triggers one immediate refresh regardless of this TTL (to pick up key rotation without waiting).",
+	"auth.oidc.issuer_url":      "OIDC issuer, exactly as the provider's discovery document states it. A trailing slash is significant (`https://idp.example.com/` and `https://idp.example.com` are different issuers): the value is compared byte for byte with the discovery `issuer`, each token's `iss`, and `tenant_members.issuer`. Discovery and the JWKS are fetched (and cached) at request time. Required when auth.methods includes oidc.",
+	"auth.oidc.audience":        "Resource identifier of the metrics API (e.g. `https://api.example.com`), which every token's `aud` must contain. It must NOT equal any SPA's `client_id`: an ID token's `aud` is the client_id, so keeping the two different is what stops an ID token being accepted as an access token. Required when auth.methods includes oidc.",
+	"auth.oidc.required_scopes": "OAuth2 scopes that must all be present (via the `scope` or `scp` claim, or the introspection response) for a token to be accepted; a token that lacks one gets 403 `insufficient_scope`. Empty means no scope requirement.",
+	"auth.oidc.jwks_cache_ttl":  "How long a fetched JWKS is cached before being refreshed. If a refresh fails, the previous keys keep being used. A token naming an unrecognized `kid` triggers one immediate refresh regardless of this TTL (to pick up key rotation), at most once per 10s so random kids cannot turn into a flood of requests to the provider.",
+
+	"auth.oidc.require_access_token_typ": "When true, a JWT whose header has a `typ` other than `at+jwt` (RFC 9068) is rejected, as an extra guard against ID tokens. A token with no `typ` header is still judged by its audience. Leave false for providers that do not set `typ` to `at+jwt` on access tokens.",
+	"auth.oidc.trust_tenant_id_claim":    "Unsafe-by-design escape hatch, off by default. Normally a user's tenant comes from tenant_members (see `argvio tenant member`) and a `tenant_id` claim, if the token carries one, must itself be a membership or the request gets 403 `no_tenant_access`. When true, a `tenant_id` claim selects the tenant without a membership, trusting the provider to assign it.",
+
+	"auth.oidc.introspection.enabled":            "Verify opaque (non-JWT, non-`argv_`) access tokens with the provider's RFC 7662 introspection endpoint. Requires oidc in auth.methods and client_id/client_secret. A token is accepted only if `active`, its `aud` contains oidc.audience (the response must include `aud`), `iss` (when present) matches, `exp`/`nbf` are valid and required_scopes are present.",
+	"auth.oidc.introspection.endpoint":           "Introspection endpoint URL. Defaults to the discovery document's `introspection_endpoint`; startup fails if introspection is enabled and neither is available. Redirects are never followed.",
+	"auth.oidc.introspection.client_id":          "Client ID this API uses to authenticate to the introspection endpoint (client_secret_basic). Required when introspection is enabled.",
+	"auth.oidc.introspection.client_secret":      "Client secret for the introspection endpoint. Required when introspection is enabled; prefer the ARGVIO_AUTH__OIDC__INTROSPECTION__CLIENT_SECRET env var over a file.",
+	"auth.oidc.introspection.cache_ttl":          "How long an active introspection result is reused, capped by the token's own `exp`. Results are cached by the SHA-256 of the token (the token itself is never stored or logged). This is also the revocation latency: a token revoked at the provider may keep working for up to this long.",
+	"auth.oidc.introspection.negative_cache_ttl": "How long a rejection (inactive, wrong audience, missing scope) is remembered, to blunt retry storms with a bad token. Provider failures are never cached.",
 
 	"public.grpc_listen_addr": "OTLP/gRPC listen address.",
 	"public.http_listen_addr": "OTLP/HTTP listen address.",
@@ -57,7 +67,7 @@ var descriptions = map[string]string{
 	"public.max_timestamp_skew_past":           "Reject a record whose timestamp is older than now minus this.",
 	"public.max_timestamp_skew_future":         "Reject a record whose timestamp is later than now plus this.",
 
-	"public.api_key_cache_ttl": "TTL for the in-memory tenant identity resolution cache — both API-key lookups and the tenant lookup a jwt/oidc caller's tenant_id claim resolves to (positive and negative results).",
+	"public.api_key_cache_ttl": "TTL for the in-memory tenant identity resolution cache — API-key lookups, tenant lookups for jwt callers, and tenant_members lookups for oidc callers (positive and negative results). Not used by `serve metrics`, which caches for a fixed 60s. A membership added or removed with `argvio tenant member` takes effect within this long.",
 
 	"public.rate_limit_requests_per_second": "Default request rate limit (token bucket) for api_key-authenticated requests. Overridable per tenant in tenant_config.",
 	"public.rate_limit_bytes_per_second":    "Default byte-rate limit for api_key-authenticated requests. Overridable per tenant.",
@@ -81,6 +91,9 @@ var descriptions = map[string]string{
 	"metrics.max_result_page_size":     "Hard ceiling on ?limit=; requests above this are clamped.",
 	"metrics.default_result_page_size": "?limit= value used when the caller omits it.",
 	"metrics.max_time_range_span":      "Reject a query whose to-from exceeds this (guards against an unbounded raw scan).",
+
+	"metrics.cors.allowed_origins": "Browser origins allowed to call the API cross-origin, e.g. `https://dashboard.example.com`; comma-separated in the env var. Empty (default) disables CORS. Matched exactly: each entry must be scheme://host[:port] with no path or trailing slash, and `*` is not supported. Credentials are never allowed, methods are GET/OPTIONS, request headers are Authorization, Content-Type and X-Argvio-Tenant, and WWW-Authenticate is exposed. Preflight requests are answered (204) before authentication, so they need no token.",
+	"metrics.cors.max_age":         "How long a browser may cache a preflight answer (Access-Control-Max-Age; browsers cap this, e.g. Chrome at 2h).",
 
 	"metrics.dev_mode": "Serve /openapi.yaml and /docs (Scalar viewer), unauthenticated. Must default false; never enable in production without an explicit decision.",
 
@@ -113,7 +126,7 @@ func main() {
 	fmt.Println()
 	fmt.Println("Generated from `internal/config`'s structs (`go run ./tools/gendocs`) — key names, env var names, types, and defaults come directly from the code that parses them; only the descriptions are hand-authored. Regenerate after changing any config struct.")
 	fmt.Println()
-	fmt.Println("Layering: **defaults → YAML config file(s) → environment variable overrides** (highest precedence wins). One config document covers every subcommand (`public`, `metrics`, and `storage` sections together) — pass it with `argvio --config path/to/argvio.yaml <command>` (`-c` repeatable: later files override earlier ones), mirroring ory/hydra's single `hydra.yml`. See [`argvio.example.yaml`](../argvio.example.yaml) for a full example. Env vars use prefix `ARGVIO_` and `__` as the nesting delimiter (plain `_` is legal inside a key name), e.g. `ARGVIO_STORAGE__PUBLIC_POOL__MAX_CONNS`.")
+	fmt.Println("Layering: **defaults → YAML config file(s) → environment variable overrides** (highest precedence wins). One config document covers every subcommand (`public`, `metrics`, and `storage` sections together) — pass it with `argvio --config path/to/argvio.yaml <command>` (`-c` repeatable: later files override earlier ones), mirroring ory/hydra's single `hydra.yml`. See [`argvio.example.yaml`](../argvio.example.yaml) for a full example. Env vars use prefix `ARGVIO_` and `__` as the nesting delimiter (plain `_` is legal inside a key name), e.g. `ARGVIO_STORAGE__PUBLIC_POOL__MAX_CONNS`. List-valued keys take a comma-separated value in an env var, e.g. `ARGVIO_METRICS__CORS__ALLOWED_ORIGINS=https://a.example.com,https://b.example.com`.")
 	fmt.Println()
 
 	printSection("## `public` server (`argvio serve public`)", publicRows)

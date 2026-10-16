@@ -15,7 +15,7 @@ flowchart LR
     PUB -->|"Layer 1 + Layer 2\nvalidation, consent-tier\nenforcement"| PUB
     PUB -->|"pgx CopyFrom\n(Writer pool)"| PG[("Postgres +\nTimescaleDB")]
     MET["metrics server\n(argvio serve metrics)"] -->|"QueryBuilder\n(Metrics pool)"| PG
-    DASH["Dashboard backend /\ntenant client"] -->|"JWT or scoped\nAPI key"| MET
+    DASH["Dashboard backend /\ntenant client"] -->|"OIDC token, JWT or\nscoped API key"| MET
     ADMIN["argvio CLI"] -->|"migrate / tenant /\napikey / policies /\nretention sweep"| PG
 ```
 
@@ -104,14 +104,60 @@ docs/schema.md for what's backing each query.
 Auth accepts whichever of the same globally-configured methods
 (`internal/config.AuthConfig`, `auth.methods` — see `public`'s auth
 section above) are enabled, scoped here to a `scope=metrics_query` API key
-(distinct from `public`'s ingest keys) instead of `public_ingest`: a JWT
-(dashboard-user session, HS256, `tenant_id` claim), a scoped API key, or
-OIDC (a third-party identity provider — `internal/oidc` fetches its
-discovery document + JWKS and verifies the bearer token's signature,
-`iss`/`aud`/`exp`, and any required scopes; the token must still carry a
-`tenant_id` claim). `internal/authn.Verifier` is what actually resolves a
-request's identity for both servers. Full endpoint/parameter/response
-reference: `openapi/openapi.yaml`.
+(distinct from `public`'s ingest keys) instead of `public_ingest`. The
+bearer token is opaque to the dashboard; `internal/authn.Verifier` picks how to
+verify it from its shape, not by trying each method in turn:
+
+| Token | Method | Verified by |
+|---|---|---|
+| starts with `argv_` | `api_key` | hash lookup in `api_keys` |
+| three-part JWS, HS256 | `jwt` | the shared HMAC secret, `tenant_id` claim |
+| three-part JWS, RS*/PS*/ES* | `oidc` | `internal/oidc`: the provider's JWKS |
+| anything else, introspection enabled | `oidc` | `internal/oidc`: RFC 7662 introspection |
+| anything else, introspection disabled | `api_key` | as before |
+
+`internal/oidc` relies only on OIDC discovery metadata and the RFCs
+(6750, 7519, 7662, 9068). It checks `iss` (exactly as the discovery document
+states it), `aud` (the API's resource identifier, deliberately never an SPA's
+client_id, which is what keeps an ID token from passing as an access token),
+`exp`/`nbf`, an optional `typ` of `at+jwt`, and any required scopes. JWT
+signatures use the provider's JWKS (asymmetric algorithms only; refreshed on a
+TTL and, rate-limited, when a token names an unknown `kid`). Opaque tokens go
+to the provider's introspection endpoint; results are cached by
+`sha256(token)` for `min(cache_ttl, exp - now)` with concurrent lookups
+sharing one call, so **revocation at the provider takes up to
+`auth.oidc.introspection.cache_ttl` to be noticed**.
+
+**Tenants come from memberships, not claims.** An OIDC identity is
+resolved from its verified `(iss, sub)` through the `tenant_members` table
+(`argvio tenant member add|remove|list`), so one user can belong to several
+tenants and access can be revoked without waiting for a token to expire.
+With one membership the request uses it; with several the dashboard sends
+`X-Argvio-Tenant` (the choices come from `GET /v1/tenants`), and no header
+gets `400 tenant_required`. The header only chooses among tenants the caller
+already owns: anything else is `403 no_tenant_access`, and the
+`storage.TenantScope` is still derived solely from the resolved identity. A
+`tenant_id` claim, if a token carries one, must itself be a membership
+(`auth.oidc.trust_tenant_id_claim` is an explicit, default-off opt-out).
+The legacy `jwt` method is unchanged.
+
+**Errors tell the dashboard what to do.** `401` +
+`WWW-Authenticate: Bearer error="invalid_token"`: re-authenticate. `403`
+(`no_tenant_access`, `insufficient_scope`): authenticated but not allowed;
+re-authenticating cannot help. `503`: the identity provider (discovery, JWKS or
+introspection) is unreachable, which is a statement about the provider, never
+about the token, so it is never a 401. Tokens are never logged; only `iss`,
+`sub` and `jti`.
+
+**Browser access.** The dashboard is a SPA on another origin, so
+`metrics.cors.allowed_origins` (empty = off) enables CORS for exact origins,
+registered ahead of authentication so the token-less preflight succeeds.
+No wildcards, no credentials, GET only.
+
+`public` runs the same verifier, but only accepts what `auth.methods` lists,
+which by default is `api_key` and `jwt`; OIDC there is opt-in, and ingest has
+no tenant selector, so an OIDC identity must have exactly one membership to
+ingest. Full endpoint/parameter/response reference: `openapi/openapi.yaml`.
 
 ## OTLP spec version
 

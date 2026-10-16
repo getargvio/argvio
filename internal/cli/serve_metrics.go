@@ -73,6 +73,9 @@ func runMetrics(cfg *config.Root, openAPIPath string, log *slog.Logger) error {
 	resolver := tenant.NewCache(tenant.NewStore(pool), apiKeyCacheTTL)
 
 	srv := metricsapi.NewServer(cfg.Metrics, cfg.Auth, storage.NewQueryBuilder(pool), resolver, openAPIPath, log)
+	if err := srv.Verifier.CheckStartup(ctx); err != nil {
+		return fmt.Errorf("auth config: %w", err)
+	}
 
 	// ReadHeaderTimeout bounds how long a client can hold the connection
 	// open while trickling in headers (Slowloris-style DoS).
@@ -86,7 +89,7 @@ func runMetrics(cfg *config.Root, openAPIPath string, log *slog.Logger) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Info("metrics api listening", "addr", cfg.Metrics.ListenAddr, "auth_methods", cfg.Auth.Methods, "dev_mode", cfg.Metrics.DevMode)
+		log.Info("metrics api listening", "addr", cfg.Metrics.ListenAddr, "auth_methods", cfg.Auth.Methods, "cors_origins", cfg.Metrics.CORS.AllowedOrigins, "dev_mode", cfg.Metrics.DevMode)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("http server: %w", err)
 		}

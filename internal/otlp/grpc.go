@@ -41,6 +41,10 @@ func grpcAuthError(err error) error {
 		return status.Error(codes.Unauthenticated, "invalid or missing credential")
 	case errors.Is(err, ErrTenantSuspended):
 		return status.Error(codes.PermissionDenied, "tenant suspended")
+	case errors.Is(err, ErrForbidden):
+		return status.Error(codes.PermissionDenied, "forbidden")
+	case errors.Is(err, ErrUnavailable):
+		return status.Error(codes.Unavailable, "identity provider unavailable")
 	case errors.Is(err, ErrRateLimited):
 		return status.Error(codes.ResourceExhausted, "rate limit exceeded")
 	default:

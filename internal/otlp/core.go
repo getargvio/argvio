@@ -18,6 +18,14 @@ var ErrUnauthenticated = errors.New("otlp: invalid or missing credential")
 var ErrRateLimited = errors.New("otlp: rate limit exceeded")
 var ErrTenantSuspended = errors.New("otlp: tenant suspended")
 
+// ErrForbidden is an authenticated caller that may not ingest: an OIDC
+// identity with no (or several, since ingest has no tenant selector)
+// tenant memberships, or one lacking a required scope.
+var ErrForbidden = errors.New("otlp: forbidden")
+
+// ErrUnavailable is an identity provider outage; retryable, unlike a bad token.
+var ErrUnavailable = errors.New("otlp: identity provider unavailable")
+
 // core holds what the gRPC and HTTP handlers share.
 type core struct {
 	verifier     *authn.Verifier
@@ -35,6 +43,10 @@ func (c *core) authenticate(ctx context.Context, token string, nBytes int) (*aut
 	case err == nil:
 	case errors.Is(err, authn.ErrTenantSuspended):
 		return nil, ErrTenantSuspended
+	case errors.Is(err, authn.ErrNoTenantAccess), errors.Is(err, authn.ErrTenantRequired), errors.Is(err, authn.ErrInsufficientScope):
+		return nil, ErrForbidden
+	case errors.Is(err, authn.ErrProviderUnavailable):
+		return nil, ErrUnavailable
 	case errors.Is(err, authn.ErrUnauthenticated):
 		return nil, ErrUnauthenticated
 	default:

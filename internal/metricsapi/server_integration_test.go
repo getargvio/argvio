@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/getargvio/argvio/internal/config"
+	"github.com/getargvio/argvio/internal/oidc/oidctest"
 	"github.com/getargvio/argvio/internal/storage"
 	"github.com/getargvio/argvio/internal/tenant"
 )
@@ -282,6 +285,152 @@ func TestMetricsAPI_EndToEnd_Live(t *testing.T) {
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("status = %d, want 400 for oversized time range", resp.StatusCode)
+		}
+	})
+}
+
+// TestMetricsAPI_OIDC_Live runs the whole path against a real Postgres: a
+// verified OIDC identity, resolved through tenant_members, scopes every query
+// to a tenant it owns.
+func TestMetricsAPI_OIDC_Live(t *testing.T) {
+	dsn := os.Getenv("ARGVIO_TEST_DSN")
+	if dsn == "" {
+		t.Skip("ARGVIO_TEST_DSN not set; skipping live metrics API OIDC test")
+	}
+	ctx := context.Background()
+	if err := storage.MigrateUp(dsn); err != nil {
+		t.Fatalf("MigrateUp: %v", err)
+	}
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgxpool.New: %v", err)
+	}
+	defer pool.Close()
+	store := tenant.NewStore(pool)
+
+	suffix := uuid.NewString()[:8]
+	acme, err := store.CreateTenant(ctx, "oidc-acme-"+suffix, "Acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	beta, err := store.CreateTenant(ctx, "oidc-beta-"+suffix, "Beta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign, err := store.CreateTenant(ctx, "oidc-foreign-"+suffix, "Foreign")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	var rows []storage.TraceRow
+	for i := 0; i < 7; i++ {
+		rows = append(rows, storage.TraceRow{
+			Time: now.Add(-time.Duration(i) * time.Minute), TenantID: acme.ID,
+			TraceID: uuid.NewString(), SpanID: uuid.NewString(), SpanName: "cli.command.deploy",
+			StartTime: now, EndTime: now.Add(time.Millisecond), DurationMs: 1,
+			StatusCode: 1, CommandName: strp("deploy"), ConsentTier: "anonymous",
+		})
+	}
+	if _, err := storage.NewWriter(pool).InsertTraces(ctx, rows); err != nil {
+		t.Fatalf("insert traces: %v", err)
+	}
+
+	idp := oidctest.New(t)
+	for _, m := range []struct {
+		sub string
+		t   uuid.UUID
+	}{{"solo", acme.ID}, {"both", acme.ID}, {"both", beta.ID}} {
+		if _, _, err := store.AddMember(ctx, m.t, idp.Issuer(), m.sub, ""); err != nil {
+			t.Fatalf("AddMember: %v", err)
+		}
+	}
+	idp.AddOpaque("opaque-both", "both", nil)
+
+	srv := NewServer(config.MetricsConfig{
+		MaxResultPageSize: 1000, DefaultResultPageSize: 100,
+		MaxTimeRangeSpan: 90 * 24 * time.Hour, QueryTimeout: 5 * time.Second,
+	}, config.AuthConfig{
+		Methods: []config.AuthMethod{config.AuthMethodOIDC},
+		OIDC: config.OIDCConfig{
+			IssuerURL: idp.Issuer(), Audience: oidctest.Audience, JWKSCacheTTL: time.Hour,
+			RequiredScopes: []string{"metrics:read"},
+			Introspection: config.OIDCIntrospectionConfig{
+				Enabled: true, ClientID: oidctest.ClientID, ClientSecret: oidctest.ClientSecret,
+				CacheTTL: time.Minute, NegativeCacheTTL: time.Second,
+			},
+		},
+	}, storage.NewQueryBuilder(pool), tenant.NewCache(store, time.Minute), "",
+		slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	from := url.QueryEscape(now.Add(-24 * time.Hour).Format(time.RFC3339))
+	call := func(t *testing.T, path, token, tenantHeader string) (int, []byte) {
+		t.Helper()
+		req, _ := http.NewRequest("GET", ts.URL+path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		if tenantHeader != "" {
+			req.Header.Set(TenantHeader, tenantHeader)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, b
+	}
+	traceCount := func(t *testing.T, token, tenantHeader string) int {
+		t.Helper()
+		status, body := call(t, "/v1/traces?from="+from, token, tenantHeader)
+		if status != http.StatusOK {
+			t.Fatalf("status = %d, body %s", status, body)
+		}
+		var out struct {
+			Data []storage.TraceSummary `json:"data"`
+		}
+		if err := json.Unmarshal(body, &out); err != nil {
+			t.Fatal(err)
+		}
+		return len(out.Data)
+	}
+
+	solo := idp.Sign(t, idp.Claims("solo"))
+	both := idp.Sign(t, idp.Claims("both"))
+
+	t.Run("one membership: JWT needs no header and sees only that tenant", func(t *testing.T) {
+		if n := traceCount(t, solo, ""); n != 7 {
+			t.Fatalf("traces = %d, want 7", n)
+		}
+	})
+	t.Run("several memberships: the header chooses, and the other tenant's data stays out", func(t *testing.T) {
+		if status, body := call(t, "/v1/traces?from="+from, both, ""); status != http.StatusBadRequest || !strings.Contains(string(body), "tenant_required") {
+			t.Fatalf("no header: status=%d body=%s", status, body)
+		}
+		if n := traceCount(t, both, acme.ID.String()); n != 7 {
+			t.Errorf("acme traces = %d, want 7", n)
+		}
+		if n := traceCount(t, both, beta.ID.String()); n != 0 {
+			t.Errorf("beta traces = %d, want 0", n)
+		}
+	})
+	t.Run("a tenant the user does not belong to is 403", func(t *testing.T) {
+		status, body := call(t, "/v1/traces?from="+from, both, foreign.ID.String())
+		if status != http.StatusForbidden || !strings.Contains(string(body), "no_tenant_access") {
+			t.Fatalf("status=%d body=%s", status, body)
+		}
+	})
+	t.Run("opaque token goes through introspection to the same result", func(t *testing.T) {
+		if n := traceCount(t, "opaque-both", acme.ID.String()); n != 7 {
+			t.Fatalf("traces = %d, want 7", n)
+		}
+	})
+	t.Run("GET /v1/tenants lists both memberships", func(t *testing.T) {
+		status, body := call(t, "/v1/tenants", both, "")
+		var got []struct{ ID, Name, Role string }
+		if status != http.StatusOK || json.Unmarshal(body, &got) != nil || len(got) != 2 {
+			t.Fatalf("status=%d body=%s", status, body)
 		}
 	})
 }
