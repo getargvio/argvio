@@ -16,7 +16,7 @@ func newTenantCommand() *cobra.Command {
 		Use:   "tenant",
 		Short: "Manage tenants",
 	}
-	cmd.AddCommand(newTenantCreateCommand(), newTenantConfigCommand())
+	cmd.AddCommand(newTenantCreateCommand(), newTenantConfigCommand(), newTenantMemberCommand())
 	return cmd
 }
 

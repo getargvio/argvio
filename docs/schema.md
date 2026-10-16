@@ -6,7 +6,7 @@ so `argvio migrate` needs no external tooling). Requires the
 `timescaledb` **and** `timescaledb_toolkit` Postgres extensions — see
 "Deployment prerequisite" below.
 
-## `tenants`, `api_keys`, `tenant_config` (`migrations/0001`)
+## `tenants`, `api_keys`, `tenant_config`, `tenant_members` (`migrations/0001`, `0007`)
 
 Plain (non-hypertable) tables — low volume, read on every ingest request
 (via `internal/tenant.Cache`, never Postgres directly on the hot path).
@@ -17,6 +17,7 @@ Plain (non-hypertable) tables — low volume, read on every ingest request
 | `api_keys` | `key_hash` (SHA-256; the raw key is shown once at creation and never stored), `key_prefix` (for admin display), `scope` (`public_ingest` or `metrics_query` — an ingest key cannot authenticate against `metrics`, and vice versa), `revoked_at`. |
 | `installs` (`migrations/0006`) | One row per `cli.install_id`: `first_seen`/`last_seen`, first and last CLI version, last os/arch, vendor-reported `install_method`, `first_command_at` and `first_success_at` (first `cli.command.completed`, and first with exit code 0). Maintained at ingest from `cli.session.started` and `cli.command.completed` logs (`internal/storage/installs.go`), so first-run, activation time and upgrades don't go wrong when raw logs age out. Only basic-tier-or-above records carry an install id, so anonymous sessions never appear. Purged by `argvio retention sweep` once `last_seen` passes the tenant's logs retention. |
 | `install_version_changes` | Append-only upgrade/downgrade log per install (`at`, `from_version`, `to_version`, `direction`), decided at ingest by comparing semver. Changes involving a version that doesn't parse as semver are not recorded. |
+| `tenant_members` (`migrations/0007`) | Which OIDC identities may use a tenant: primary key `(tenant_id, issuer, subject)`, plus `role` (default `viewer`) and `created_at`. `issuer` is compared byte for byte with the token's `iss`, so it must be the provider's discovery `issuer` exactly (trailing slash included). A user's tenant is resolved from this table by the *verified* `(iss, sub)`, never from a token claim; one identity may belong to many tenants. Managed with `argvio tenant member add\|remove\|list`; servers cache lookups for up to their tenant cache TTL. |
 | `tenant_config` | Runtime-tunable per-tenant overrides: `tier_ceiling`, `tier_enforcement_mode` (`strip`/`reject`), rate-limit overrides, retention-day overrides. One row per tenant, mutated via `argvio tenant config`, never via static config files. |
 
 `traces`/`logs`/`metrics` deliberately have **no foreign key** to
@@ -48,6 +49,7 @@ server issues is tenant-scoped.
 erDiagram
     tenants ||--o{ api_keys : "has"
     tenants ||--|| tenant_config : "has"
+    tenants ||--o{ tenant_members : "has"
     tenants ||--o{ traces : "tenant_id (not FK)"
     tenants ||--o{ logs : "tenant_id (not FK)"
     tenants ||--o{ metrics : "tenant_id (not FK)"

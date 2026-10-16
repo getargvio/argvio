@@ -1,6 +1,17 @@
 package config
 
-import "time"
+import (
+	"net/url"
+	"strings"
+	"time"
+)
+
+// CORSConfig lets a browser SPA on another origin call the metrics API.
+// Disabled while AllowedOrigins is empty.
+type CORSConfig struct {
+	AllowedOrigins []string      `koanf:"allowed_origins"`
+	MaxAge         time.Duration `koanf:"max_age"`
+}
 
 // MetricsConfig configures the read-oriented query/analysis API. This
 // server is internal/trusted-tenant facing (docs/architecture.md) — the
@@ -19,6 +30,8 @@ type MetricsConfig struct {
 	// by an over-broad dashboard query.
 	MaxTimeRangeSpan time.Duration `koanf:"max_time_range_span"`
 
+	CORS CORSConfig `koanf:"cors"`
+
 	// DevMode gates /openapi.yaml + the Scalar viewer. Must default false;
 	// never flip true in production without an explicit decision.
 	DevMode bool `koanf:"dev_mode"`
@@ -36,8 +49,30 @@ func metricsDefaults() map[string]any {
 		"metrics.default_result_page_size": 100,
 		"metrics.max_time_range_span":      "2160h", // 90d
 
+		"metrics.cors.allowed_origins": []string{},
+		"metrics.cors.max_age":         "10m",
+
 		"metrics.dev_mode": false,
 
 		"metrics.shutdown_grace_period": "15s",
 	}
+}
+
+func (c CORSConfig) validate() []string {
+	var errs []string
+	for _, o := range c.AllowedOrigins {
+		u, err := url.Parse(o)
+		switch {
+		case strings.Contains(o, "*"):
+			errs = append(errs, "metrics.cors.allowed_origins must list exact origins, wildcards are not supported (got \""+o+"\")")
+		case err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil:
+			errs = append(errs, "metrics.cors.allowed_origins entry \""+o+"\" must be an origin like https://dashboard.example.com")
+		case u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.Hostname() == "":
+			errs = append(errs, "metrics.cors.allowed_origins entry \""+o+"\" must be scheme://host[:port] only, with no path, query, fragment or trailing slash")
+		}
+	}
+	if len(c.AllowedOrigins) > 0 && c.MaxAge < 0 {
+		errs = append(errs, "metrics.cors.max_age must be >= 0")
+	}
+	return errs
 }

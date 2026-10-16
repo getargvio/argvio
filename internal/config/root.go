@@ -88,6 +88,7 @@ func (r Root) ValidateMetrics() error {
 		errs = append(errs, "metrics.tls.cert_file and key_file are required when metrics.tls.enabled = true")
 	}
 	errs = append(errs, r.Auth.validate()...)
+	errs = append(errs, r.Metrics.CORS.validate()...)
 	if r.Metrics.QueryTimeout <= 0 {
 		errs = append(errs, "metrics.query_timeout must be > 0")
 	}

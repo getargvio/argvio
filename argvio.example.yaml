@@ -22,13 +22,28 @@ log_level: info
 auth:
   methods: [api_key, jwt] # any of: api_key, jwt, oidc
   jwt_signing_key: "change-me-in-production"
-  # Only used when methods includes oidc — validates bearer tokens against
-  # a third-party identity provider instead of a static HMAC secret.
+  # Only used when methods includes oidc — verifies OAuth2 access tokens from
+  # a third-party OIDC provider (JWTs, and with introspection, opaque tokens).
+  # A user's tenant comes from `argvio tenant member add`, not from a claim.
   # oidc:
-  #   issuer_url: "https://your-tenant.example.auth0.com/"
-  #   audience: "argvio-metrics"
+  #   # Exactly as the provider's discovery document states it: a trailing
+  #   # slash is significant.
+  #   issuer_url: "https://idp.example.com"
+  #   # Resource identifier of this API. Must NOT equal any SPA's client_id.
+  #   audience: "https://api.example.com"
   #   required_scopes: ["metrics:read"]
   #   jwks_cache_ttl: 15m
+  #   require_access_token_typ: false # true: reject a JWT whose typ isn't at+jwt
+  #   trust_tenant_id_claim: false # leave off: a tenant_id claim must be a membership
+  #   # Opaque access tokens (RFC 7662). Revocation at the provider takes up
+  #   # to cache_ttl to be noticed.
+  #   introspection:
+  #     enabled: true
+  #     endpoint: "" # default: the discovery document's introspection_endpoint
+  #     client_id: "argvio-api"
+  #     client_secret: "set via ARGVIO_AUTH__OIDC__INTROSPECTION__CLIENT_SECRET"
+  #     cache_ttl: 60s
+  #     negative_cache_ttl: 5s
 
 storage:
   dsn: "postgres://postgres:postgres@localhost:5432/argvio?sslmode=disable"
@@ -58,3 +73,8 @@ public:
 metrics:
   listen_addr: "0.0.0.0:8080"
   dev_mode: false
+  # Let the dashboard SPA call the API from another origin. Empty = CORS off.
+  # Exact origins only (scheme://host[:port], no wildcard, no trailing slash).
+  # cors:
+  #   allowed_origins: ["https://dashboard.example.com"]
+  #   max_age: 10m

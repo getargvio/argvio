@@ -25,10 +25,14 @@ func envKeyTransform(s string) string {
 	return strings.ToLower(dotted)
 }
 
-// durationDecodeHook lets koanf.Unmarshal populate time.Duration fields from
-// YAML/env string values like "24h" or "15s".
-func durationDecodeHook() mapstructure.DecodeHookFunc {
-	return mapstructure.StringToTimeDurationHookFunc()
+// decodeHook lets koanf.Unmarshal populate time.Duration fields from
+// YAML/env string values like "24h" or "15s", and list fields from a
+// comma-separated env var like ARGVIO_AUTH__METHODS=api_key,oidc.
+func decodeHook() mapstructure.DecodeHookFunc {
+	return mapstructure.ComposeDecodeHookFunc(
+		mapstructure.StringToTimeDurationHookFunc(),
+		mapstructure.StringToWeakSliceHookFunc(","),
+	)
 }
 
 // loadInto layers defaults -> zero or more YAML files, in the order given
@@ -61,7 +65,7 @@ func loadInto(paths []string, defaults map[string]any, dst any) error {
 		DecoderConfig: &mapstructure.DecoderConfig{
 			Result:           dst,
 			WeaklyTypedInput: true,
-			DecodeHook:       durationDecodeHook(),
+			DecodeHook:       decodeHook(),
 			TagName:          "koanf",
 		},
 	}); err != nil {

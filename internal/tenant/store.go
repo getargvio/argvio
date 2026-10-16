@@ -235,6 +235,10 @@ func (s *Store) RevokeAPIKey(ctx context.Context, keyID uuid.UUID) error {
 	return nil
 }
 
+// APIKeyPrefix starts every API key (argv_<env>_<scope>_<random>), which is
+// how a key is told apart from an opaque OAuth2 access token.
+const APIKeyPrefix = "argv_"
+
 func generateRawKey(scope string) (string, error) {
 	buf := make([]byte, 24)
 	if _, err := rand.Read(buf); err != nil {
@@ -245,7 +249,7 @@ func generateRawKey(scope string) (string, error) {
 	if scope == ScopeMetricsQuery {
 		scopeTag = "qry"
 	}
-	return fmt.Sprintf("argv_%s_%s_%s", envTag, scopeTag, base64.RawURLEncoding.EncodeToString(buf)), nil
+	return fmt.Sprintf("%s%s_%s_%s", APIKeyPrefix, envTag, scopeTag, base64.RawURLEncoding.EncodeToString(buf)), nil
 }
 
 func min(a, b int) int {

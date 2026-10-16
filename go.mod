@@ -3,9 +3,10 @@ module github.com/getargvio/argvio
 go 1.27.0
 
 require (
-	github.com/MicahParks/keyfunc/v3 v3.8.2
+	github.com/MicahParks/jwkset v0.11.3
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-chi/chi/v5 v5.3.2
+	github.com/go-chi/cors v1.2.2
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/golang-migrate/migrate/v4 v4.20.1
@@ -18,6 +19,7 @@ require (
 	github.com/knadh/koanf/v2 v2.3.7
 	github.com/spf13/cobra v1.10.2
 	go.opentelemetry.io/collector/pdata v1.67.0
+	golang.org/x/sync v0.23.0
 	golang.org/x/time v0.16.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260921155816-b14227669459
 	google.golang.org/grpc v1.84.0
@@ -26,7 +28,6 @@ require (
 )
 
 require (
-	github.com/MicahParks/jwkset v0.11.3 // indirect
 	github.com/hashicorp/go-version v1.9.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6 // indirect
@@ -45,7 +46,6 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/net v0.59.0 // indirect
-	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
 )

@@ -11,6 +11,23 @@ info:
     request another tenant's data (see the `security` section and
     docs/architecture.md).
 
+    **Authentication.** Send `Authorization: Bearer <token>`. The token is
+    opaque to the caller; the server decides how to verify it: an
+    `argv_…` API key, an HS256 session JWT, or an OAuth2 access token from
+    the configured OIDC provider (a JWT, or an opaque token verified by
+    RFC 7662 introspection). A dashboard user's identity maps to tenants
+    through memberships (`argvio tenant member add`), not through a token
+    claim. A user with several memberships selects one per request with the
+    `X-Argvio-Tenant` header; see `GET /v1/tenants`.
+
+    Errors a client must tell apart: **401** with `WWW-Authenticate: Bearer
+    error="invalid_token"` means the token is bad or expired (re-authenticate);
+    **403** (`no_tenant_access`, `insufficient_scope`) means the caller is
+    authenticated but not allowed (do *not* re-authenticate); **400
+    `tenant_required`** means the identity has several tenants and the request
+    named none; **503** means the identity provider is unreachable, which says
+    nothing about the token.
+
     This spec covers the `metrics` server only. The `public` server is a
     spec-compliant OTLP receiver (gRPC + HTTP), documented by reference to
     the OpenTelemetry Protocol specification in docs/architecture.md rather
@@ -44,7 +61,47 @@ paths:
                 type: string
                 example: ok
 
+  /v1/tenants:
+    get:
+      summary: List the caller's tenants
+      description: >
+        The tenants the authenticated OIDC user is a member of, i.e. the values
+        accepted by the `X-Argvio-Tenant` header on every other `/v1/*` call.
+        Needs no tenant selection itself and ignores the header, so a client
+        calls it right after sign-in to decide which tenant to use. A user
+        with no memberships gets an empty array (not an error) so the dashboard
+        can show a "no access" screen. The body is a bare array, not the
+        `{"data": ...}` envelope the query endpoints use.
+
+        Only an OIDC identity has memberships: an API key or HS256 session JWT
+        is already bound to one tenant and gets 403.
+      operationId: listTenants
+      security:
+        - BearerOIDC: []
+      responses:
+        "200":
+          description: The caller's memberships, ordered by tenant name.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TenantMembership"
+              example:
+                - { id: "5e35bea9-11a3-4c64-a1dc-8a97ce3f0783", name: "Acme", role: admin }
+                - { id: "0b1f2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", name: "Beta", role: viewer }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /v1/traces:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
     get:
       summary: List raw spans
       description: >
@@ -98,11 +155,17 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
         "500":
           $ref: "#/components/responses/InternalError"
 
 
   /v1/meta/dimensions:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
     get:
       summary: Distinct filter values the tenant has data for
       description: >
@@ -128,10 +191,16 @@ paths:
                   command_name: ["deploy", "status"]
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
         "500":
           $ref: "#/components/responses/InternalError"
 
   /v1/metrics/latency:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
     get:
       summary: Command latency percentiles (p50/p95/p99), time-bucketed
       operationId: latencyPercentiles
@@ -170,10 +239,16 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
         "500":
           $ref: "#/components/responses/InternalError"
 
   /v1/metrics/error-rate:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
     get:
       summary: Error rate over time, per command
       operationId: errorRateSeries
@@ -211,10 +286,16 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
         "500":
           $ref: "#/components/responses/InternalError"
 
   /v1/metrics/command-frequency:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
     get:
       summary: Command invocation frequency histogram, time-bucketed
       operationId: commandFrequency
@@ -250,10 +331,16 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
         "500":
           $ref: "#/components/responses/InternalError"
 
   /v1/metrics/cohorts:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
     get:
       summary: Session/activation cohort counts, time-bucketed (day or coarser)
       operationId: sessionCohorts
@@ -290,10 +377,16 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
         "500":
           $ref: "#/components/responses/InternalError"
 
   /v1/metrics/exit-codes:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
     get:
       summary: Invocation counts per exit code, per command, time-bucketed
       description: >
@@ -334,10 +427,16 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
         "500":
           $ref: "#/components/responses/InternalError"
 
   /v1/metrics/error-types:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
     get:
       summary: Error counts per error category, per command, time-bucketed
       description: >
@@ -382,10 +481,16 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
         "500":
           $ref: "#/components/responses/InternalError"
 
   /v1/metrics/friction:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
     get:
       summary: Help views and interrupted runs per command, time-bucketed
       description: >
@@ -431,10 +536,16 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
         "500":
           $ref: "#/components/responses/InternalError"
 
   /v1/metrics/install-funnel:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
     get:
       summary: "Install funnel (first seen, ran a command, first success), by cohort"
       description: >
@@ -482,10 +593,16 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
         "500":
           $ref: "#/components/responses/InternalError"
 
   /v1/metrics/install-activation:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
     get:
       summary: Time from first seen to first successful command, by cohort
       description: >
@@ -535,10 +652,16 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
         "500":
           $ref: "#/components/responses/InternalError"
 
   /v1/metrics/install-methods:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
     get:
       summary: "Installs by install method, by cohort"
       description: >
@@ -585,10 +708,16 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
         "500":
           $ref: "#/components/responses/InternalError"
 
   /v1/metrics/new-vs-returning:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
     get:
       summary: "Active installs split into new and returning, time-bucketed"
       description: >
@@ -632,10 +761,16 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
         "500":
           $ref: "#/components/responses/InternalError"
 
   /v1/metrics/version-changes:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
     get:
       summary: Upgrades and downgrades between versions, time-bucketed
       description: >
@@ -679,10 +814,16 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
         "500":
           $ref: "#/components/responses/InternalError"
 
   /v1/metrics/install-coverage:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
     get:
       summary: Share of sessions that the install-based metrics can see
       description: >
@@ -722,10 +863,16 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
         "500":
           $ref: "#/components/responses/InternalError"
 
   /v1/metrics/ci-split:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
     get:
       summary: Command invocations split by CI vs. interactive, time-bucketed
       description: >
@@ -764,10 +911,16 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
         "500":
           $ref: "#/components/responses/InternalError"
 
   /v1/metrics/active-installs:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
     get:
       summary: Active installs (DAU/WAU/MAU), time-bucketed
       description: >
@@ -808,10 +961,16 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
         "500":
           $ref: "#/components/responses/InternalError"
 
   /v1/metrics/retention:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
     get:
       summary: Install retention by cohort
       description: >
@@ -856,6 +1015,10 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -881,18 +1044,50 @@ components:
     BearerOIDC:
       type: http
       scheme: bearer
-      bearerFormat: JWT
       description: >
-        Token issued by a third-party OIDC provider (Auth0, Okta, Azure AD,
-        ...), configured via metrics.oidc.*. Verified against the
-        provider's published JWKS (fetched from its
-        /.well-known/openid-configuration document); must carry a
-        `tenant_id` claim, a standard `exp`, an `aud` matching
-        metrics.oidc.audience, and — if metrics.oidc.required_scopes is
-        set — a `scope` or `scp` claim containing every required scope.
-        Only asymmetric algorithms (RS*/PS*/ES*) are accepted.
+        OAuth2 access token from the configured OIDC provider
+        (`auth.oidc.*`; requires `oidc` in `auth.methods`). The client treats
+        it as opaque; the server verifies it one of two ways, chosen by the
+        token's shape.
+
+        **JWT access token** (three-part JWS with an asymmetric `alg`,
+        RS*/PS*/ES*; `none` and HMAC are rejected). Verified against the
+        provider's JWKS from its `/.well-known/openid-configuration`. Needs
+        `iss` equal to the discovery `issuer` byte for byte (trailing slash
+        included), `aud` containing `auth.oidc.audience`, `exp`, and, if
+        `auth.oidc.required_scopes` is set, every scope in `scope`/`scp`. With
+        `auth.oidc.require_access_token_typ`, a `typ` header other than
+        `at+jwt` (RFC 9068) is rejected, which keeps ID tokens out.
+        `auth.oidc.audience` must be a resource identifier for this API and
+        must never equal an SPA's `client_id`; an ID token's `aud` is the
+        client_id, so that is what stops an ID token being accepted.
+
+        **Opaque token** (anything else not starting with `argv_`), when
+        `auth.oidc.introspection.enabled`. Verified with the provider's RFC 7662
+        introspection endpoint: accepted only if `active`, `aud` contains the
+        audience, `iss` (if present) matches, `exp`/`nbf` are valid and the
+        required scopes are present. Results are cached, so a token revoked at
+        the provider can still be accepted for up to
+        `auth.oidc.introspection.cache_ttl`.
+
+        The token identifies a user, not a tenant: the verified `(iss, sub)` is
+        looked up in `tenant_members`. One membership is used automatically;
+        several require `X-Argvio-Tenant`. A `tenant_id` claim, if present,
+        must itself be a membership.
 
   parameters:
+    TenantHeader:
+      name: X-Argvio-Tenant
+      in: header
+      required: false
+      description: >
+        UUID of the tenant this request is for. Optional for a caller with
+        exactly one tenant; required (else 400 `tenant_required`) for an OIDC
+        user with several memberships. It can only select among tenants the
+        caller already belongs to: any other value is 403 `no_tenant_access`,
+        for an API key or session JWT too. List the choices with
+        `GET /v1/tenants`.
+      schema: { type: string, format: uuid }
     From:
       name: from
       in: query
@@ -1198,6 +1393,14 @@ components:
         command_name: { type: array, items: { type: string } }
       required: [cli_version, os, arch, command_name]
 
+    TenantMembership:
+      type: object
+      properties:
+        id: { type: string, format: uuid, description: "Value to send in X-Argvio-Tenant." }
+        name: { type: string }
+        role: { type: string, description: "The caller's role in this tenant, e.g. viewer or admin." }
+      required: [id, name, role]
+
     Error:
       type: object
       properties:
@@ -1209,19 +1412,47 @@ components:
     BadRequest:
       description: >
         Invalid filter (malformed timestamp, unknown bucket value, time
-        range wider than max_time_range_span, etc).
+        range wider than max_time_range_span, etc), or `tenant_required`: the
+        caller belongs to several tenants and sent no `X-Argvio-Tenant` header.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
           example: { error: invalid_request, message: "requested time range 8760h0m0s exceeds max_time_range_span 2160h0m0s" }
     Unauthorized:
       description: >
-        Missing, invalid, expired, or tampered token; or a token whose
-        tenant_id claim does not resolve to an active tenant.
+        The credential is missing, invalid, expired or tampered with; the
+        client should re-authenticate. Carries `WWW-Authenticate: Bearer
+        error="invalid_token"` (a bare `Bearer` when no credential was sent).
+      headers:
+        WWW-Authenticate:
+          schema: { type: string }
+          example: Bearer error="invalid_token"
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
-          example: { error: unauthorized, message: "invalid or expired token" }
+          example: { error: unauthorized, message: "invalid or expired credential" }
+    Forbidden:
+      description: >
+        Authenticated, but not allowed. The client must **not** re-authenticate:
+        a new token would get the same answer. `error` is one of
+        `no_tenant_access` (no membership at all, or `X-Argvio-Tenant` names a
+        tenant the caller does not belong to), `insufficient_scope` (the token
+        lacks a scope the server requires; also sent as `WWW-Authenticate:
+        Bearer error="insufficient_scope"`) or `forbidden` (e.g. suspended
+        tenant).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: no_tenant_access, message: "no access to the requested tenant" }
+    ProviderUnavailable:
+      description: >
+        The OIDC provider's discovery, JWKS or introspection endpoint could not
+        be reached, so the token could not be judged. Says nothing about the
+        token: retry shortly; do not re-authenticate.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: provider_unavailable, message: "the identity provider could not be reached; retry shortly" }
     InternalError:
       description: Unexpected server-side failure. Detail is intentionally generic — see server logs.
       content:

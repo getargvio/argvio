@@ -132,6 +132,21 @@ the secret — see `internal/authn/authn.go` for exactly what's validated
 now, so a signed JWT works against the OTLP ingest endpoint too, not just
 `metrics` — see docs/architecture.md.
 
+To sign users in through an OIDC provider instead, add `oidc` to
+`auth.methods`, set `auth.oidc.*` (see `argvio.example.yaml`), and grant each
+user access to a tenant. The user is identified by the `iss` and `sub` of their
+verified token:
+
+```sh
+go run ./cmd/argvio tenant member add --tenant <TENANT_ID_OR_SLUG> \
+  --issuer https://idp.example.com --sub <USER_SUB> --role viewer --dsn "$DSN"
+go run ./cmd/argvio tenant member list --tenant <TENANT_ID_OR_SLUG> --dsn "$DSN"
+```
+
+`--issuer` must match the provider's discovery `issuer` exactly (trailing slash
+included). A user in several tenants calls `GET /v1/tenants` and then sends
+`X-Argvio-Tenant: <tenant id>` on every request.
+
 ## Continuous aggregates in local dev
 
 Continuous aggregates refresh on a schedule (`add_continuous_aggregate_policy`,

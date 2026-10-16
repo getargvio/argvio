@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
 
 	"github.com/getargvio/argvio/internal/storage"
 )
@@ -20,9 +21,21 @@ func (s *Server) router() http.Handler {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Logger)
 
+	// Registered before any auth: a browser sends the CORS preflight without
+	// a token, and the allow/deny decision must not depend on credentials.
+	if h := s.corsHandler(); h != nil {
+		r.Use(h)
+	}
+
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
+	})
+
+	// About the user, not a tenant's data: needs no tenant to be chosen yet.
+	r.Group(func(r chi.Router) {
+		r.Use(s.userMiddleware)
+		r.Get("/v1/tenants", s.handleTenants)
 	})
 
 	r.Group(func(r chi.Router) {
@@ -57,6 +70,45 @@ func (s *Server) router() http.Handler {
 	}
 
 	return r
+}
+
+// corsHandler returns the CORS middleware, or nil while no origin is allowed.
+// Origins match exactly (config validation rejects wildcards), credentials are
+// never allowed (bearer tokens travel in a header, not a cookie), and only the
+// verbs and headers this API uses are permitted.
+func (s *Server) corsHandler() func(http.Handler) http.Handler {
+	if len(s.CORS.AllowedOrigins) == 0 {
+		return nil
+	}
+	handler := cors.Handler(cors.Options{
+		AllowedOrigins:   s.CORS.AllowedOrigins,
+		AllowedMethods:   []string{http.MethodGet, http.MethodOptions},
+		AllowedHeaders:   []string{"Authorization", "Content-Type", TenantHeader},
+		ExposedHeaders:   []string{"WWW-Authenticate"},
+		AllowCredentials: false,
+		MaxAge:           int(s.CORS.MaxAge.Seconds()),
+	})
+	return func(next http.Handler) http.Handler { return preflightNoContent(handler(next)) }
+}
+
+// preflightNoContent answers a CORS preflight with 204 rather than the 200
+// go-chi/cors hard-codes, the conventional status for an empty reply.
+func preflightNoContent(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" && r.Header.Get("Origin") != "" {
+			w = &statusRewriter{ResponseWriter: w}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+type statusRewriter struct{ http.ResponseWriter }
+
+func (w *statusRewriter) WriteHeader(code int) {
+	if code == http.StatusOK {
+		code = http.StatusNoContent
+	}
+	w.ResponseWriter.WriteHeader(code)
 }
 
 func (s *Server) handleOpenAPISpec(w http.ResponseWriter, r *http.Request) {

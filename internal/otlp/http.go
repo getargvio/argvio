@@ -42,8 +42,10 @@ func httpStatusForAuthError(err error) int {
 	switch {
 	case errors.Is(err, ErrUnauthenticated):
 		return http.StatusUnauthorized
-	case errors.Is(err, ErrTenantSuspended):
+	case errors.Is(err, ErrTenantSuspended), errors.Is(err, ErrForbidden):
 		return http.StatusForbidden
+	case errors.Is(err, ErrUnavailable):
+		return http.StatusServiceUnavailable
 	case errors.Is(err, ErrRateLimited):
 		return http.StatusTooManyRequests
 	default:
