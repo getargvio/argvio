@@ -83,3 +83,46 @@ func TestCoreAuthenticate_AuthMethods(t *testing.T) {
 		}
 	})
 }
+
+// TestCoreAuthenticate_NeverAdmin: admin identity is a metrics-server concept.
+// The public server builds its verifier without EnableAdmin, so even a token
+// an admin rule would accept is an ordinary identity here, and should a
+// verifier with admin enabled ever be wired in, ingest refuses its identities
+// rather than let them write into a tenant nobody granted them.
+func TestCoreAuthenticate_NeverAdmin(t *testing.T) {
+	idp := oidctest.New(t)
+	res := tenanttest.New()
+	acme := res.AddTenant("acme", "active")
+	res.AddMember(idp.Issuer(), "member", acme, "viewer")
+	// "root" is not a member of anything; only an admin could reach acme.
+	cfg := config.AuthConfig{
+		Methods: []config.AuthMethod{config.AuthMethodOIDC},
+		OIDC:    config.OIDCConfig{IssuerURL: idp.Issuer(), Audience: oidctest.Audience, JWKSCacheTTL: time.Hour},
+	}
+	newCore := func(v *authn.Verifier) *core {
+		return &core{
+			verifier: v,
+			limiter:  ratelimit.New(ratelimit.Defaults{RequestsPerSecond: 1000, BytesPerSecond: 1e9, Burst: 1000}, nil),
+		}
+	}
+	isRoot := authn.AdminRecognizerFunc(func(id authn.Identity) (string, bool) { return "test", id.Subject == "root" })
+
+	t.Run("a public verifier does not recognise admins", func(t *testing.T) {
+		_, err := newCore(authn.New(cfg, res, tenant.ScopePublicIngest)).authenticate(context.Background(), idp.Sign(t, idp.Claims("root")), 10)
+		if !errors.Is(err, ErrForbidden) {
+			t.Fatalf("err = %v, want ErrForbidden (no membership)", err)
+		}
+	})
+
+	t.Run("ingest refuses an admin identity even from a verifier that has admin enabled", func(t *testing.T) {
+		v := authn.New(cfg, res, tenant.ScopePublicIngest)
+		v.EnableAdmin(cfg, isRoot)
+		c := newCore(v)
+		if _, err := c.authenticate(context.Background(), idp.Sign(t, idp.Claims("root")), 10); !errors.Is(err, ErrForbidden) {
+			t.Fatalf("admin: err = %v, want ErrForbidden", err)
+		}
+		if id, err := c.authenticate(context.Background(), idp.Sign(t, idp.Claims("member")), 10); err != nil || id.Resolved.Tenant.ID != acme {
+			t.Fatalf("member still ingests: id=%+v err=%v", id, err)
+		}
+	})
+}

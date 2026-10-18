@@ -54,6 +54,10 @@ var (
 // For MethodOIDC, Issuer and Subject are the verified token's identity and
 // Role is the caller's role in the resolved tenant. Resolved is nil on an
 // Identity from AuthenticateSubject, which stops before choosing a tenant.
+//
+// Admin is set only for an OIDC identity that was verified and recognised as
+// an admin (see EnableAdmin), and AdminRule names the rule that matched. Its
+// tenant comes from the active tenants rather than from memberships.
 type Identity struct {
 	Method   Method
 	Resolved *tenant.Resolved
@@ -62,6 +66,9 @@ type Identity struct {
 	Issuer  string
 	Subject string
 	Role    string
+
+	Admin     bool
+	AdminRule string
 }
 
 // Verifier authenticates bearer tokens against the configured methods.
@@ -75,6 +82,9 @@ type Verifier struct {
 	// trustTenantIDClaim lets an OIDC token's tenant_id claim pick the tenant
 	// without a membership row. Off unless explicitly configured.
 	trustTenantIDClaim bool
+
+	// admin is nil unless EnableAdmin was called.
+	admin *adminAccess
 }
 
 // New builds a Verifier. apiKeyScope must never overlap between the public
@@ -91,20 +101,24 @@ func New(cfg config.AuthConfig, resolver tenant.Resolver, apiKeyScope string) *V
 		apiKeyScope:   apiKeyScope,
 	}
 	if methods[MethodOIDC] {
-		ov := oidc.NewVerifier(cfg.OIDC.IssuerURL, cfg.OIDC.Audience, cfg.OIDC.RequiredScopes, cfg.OIDC.JWKSCacheTTL)
-		ov.RequireAccessTokenTyp = cfg.OIDC.RequireAccessTokenTyp
-		ov.Introspection = oidc.IntrospectionConfig{
-			Enabled:          cfg.OIDC.Introspection.Enabled,
-			Endpoint:         cfg.OIDC.Introspection.Endpoint,
-			ClientID:         cfg.OIDC.Introspection.ClientID,
-			ClientSecret:     cfg.OIDC.Introspection.ClientSecret,
-			CacheTTL:         cfg.OIDC.Introspection.CacheTTL,
-			NegativeCacheTTL: cfg.OIDC.Introspection.NegativeCacheTTL,
-		}
-		v.oidcVerifier = ov
+		v.oidcVerifier = newOIDCVerifier(cfg.OIDC)
 		v.trustTenantIDClaim = cfg.OIDC.TrustTenantIDClaim
 	}
 	return v
+}
+
+func newOIDCVerifier(cfg config.OIDCConfig) *oidc.Verifier {
+	ov := oidc.NewVerifier(cfg.IssuerURL, cfg.Audience, cfg.RequiredScopes, cfg.JWKSCacheTTL)
+	ov.RequireAccessTokenTyp = cfg.RequireAccessTokenTyp
+	ov.Introspection = oidc.IntrospectionConfig{
+		Enabled:          cfg.Introspection.Enabled,
+		Endpoint:         cfg.Introspection.Endpoint,
+		ClientID:         cfg.Introspection.ClientID,
+		ClientSecret:     cfg.Introspection.ClientSecret,
+		CacheTTL:         cfg.Introspection.CacheTTL,
+		NegativeCacheTTL: cfg.Introspection.NegativeCacheTTL,
+	}
+	return ov
 }
 
 // CheckStartup fails fast on an auth configuration the identity provider
@@ -113,7 +127,15 @@ func (v *Verifier) CheckStartup(ctx context.Context) error {
 	if v.oidcVerifier == nil {
 		return nil
 	}
-	return v.oidcVerifier.CheckStartup(ctx)
+	if err := v.oidcVerifier.CheckStartup(ctx); err != nil {
+		return err
+	}
+	if v.admin != nil && v.admin.verifier != nil {
+		if err := v.admin.verifier.CheckStartup(ctx); err != nil {
+			return fmt.Errorf("admin: %w", err)
+		}
+	}
+	return nil
 }
 
 // Authenticate resolves a bearer credential to an identity with no tenant
@@ -130,6 +152,9 @@ func (v *Verifier) AuthenticateForTenant(ctx context.Context, raw, tenantHint st
 	id, err := v.AuthenticateSubject(ctx, raw)
 	if err != nil {
 		return Identity{}, err
+	}
+	if id.Admin {
+		return v.selectAdminTenant(ctx, id, tenantHint)
 	}
 	if id.Resolved != nil { // api_key / jwt: bound to one tenant by the credential
 		if tenantHint != "" && !tenantMatches(tenantHint, id.Resolved.Tenant.ID) {
@@ -163,14 +188,14 @@ func (v *Verifier) AuthenticateSubject(ctx context.Context, raw string) (Identit
 		case alg == "HS256" && v.methods[MethodJWT]:
 			return v.authenticateJWT(ctx, raw)
 		case isAsymmetricAlg(alg) && v.methods[MethodOIDC]:
-			return v.authenticateOIDC(ctx, raw, v.oidcVerifier.Verify)
+			return v.authenticateOIDC(ctx, raw, false)
 		default:
 			return Identity{}, ErrUnauthenticated
 		}
 	}
 
-	if v.methods[MethodOIDC] && v.oidcVerifier.IntrospectionEnabled() {
-		return v.authenticateOIDC(ctx, raw, v.oidcVerifier.Introspect)
+	if v.methods[MethodOIDC] && (v.oidcVerifier.IntrospectionEnabled() || v.admin.introspects()) {
+		return v.authenticateOIDC(ctx, raw, true)
 	}
 	return v.authenticateAPIKey(ctx, raw)
 }
@@ -187,9 +212,44 @@ func (v *Verifier) authenticateJWT(ctx context.Context, raw string) (Identity, e
 	return v.identityFromClaims(ctx, MethodJWT, claims)
 }
 
-// authenticateOIDC verifies a token with verify (JWT or introspection) and
-// translates the verifier's error classes.
-func (v *Verifier) authenticateOIDC(ctx context.Context, raw string, verify func(context.Context, string) (jwt.MapClaims, error)) (Identity, error) {
+// authenticateOIDC verifies a JWT (or, when opaque, an introspected token) as
+// an OIDC identity. With admin enabled the token is first tried against the
+// admin verification, if that differs from user verification; a token that is
+// not an admin's is then verified as a user's. When the two are the same the
+// token is verified once and the result checked for admin recognition.
+func (v *Verifier) authenticateOIDC(ctx context.Context, raw string, opaque bool) (Identity, error) {
+	admin, ok, adminErr := v.authenticateAdminFirst(ctx, raw, opaque)
+	if ok {
+		return admin, nil
+	}
+
+	if opaque && !v.oidcVerifier.IntrospectionEnabled() {
+		// Only admin verification introspects; user callers keep the old
+		// behaviour for such a token, which is to treat it as an API key.
+		if adminErr != nil && !errors.Is(adminErr, ErrUnauthenticated) {
+			return Identity{}, adminErr
+		}
+		return v.authenticateAPIKey(ctx, raw)
+	}
+
+	id, err := v.verifyOIDC(ctx, v.oidcVerifier, raw, opaque)
+	if err != nil {
+		return Identity{}, preferAdminErr(err, adminErr)
+	}
+	if v.admin != nil && v.admin.verifier == nil {
+		if rule, ok := v.admin.recognize(id); ok {
+			id.Admin, id.AdminRule = true, rule
+		}
+	}
+	return id, nil
+}
+
+// verifyOIDC verifies raw with ov and translates its error classes.
+func (v *Verifier) verifyOIDC(ctx context.Context, ov *oidc.Verifier, raw string, opaque bool) (Identity, error) {
+	verify := ov.Verify
+	if opaque {
+		verify = ov.Introspect
+	}
 	claims, err := verify(ctx, raw)
 	switch {
 	case err == nil:
@@ -202,11 +262,15 @@ func (v *Verifier) authenticateOIDC(ctx context.Context, raw string, verify func
 	// The verifier checked iss against its configured issuer, which is what
 	// memberships are keyed on; do not take it from a response that may omit it.
 	sub, _ := claims["sub"].(string)
-	return Identity{Method: MethodOIDC, Claims: claims, Issuer: v.oidcVerifier.IssuerURL, Subject: sub}, nil
+	return Identity{Method: MethodOIDC, Claims: claims, Issuer: ov.IssuerURL, Subject: sub}, nil
 }
 
-// Memberships lists the tenants an OIDC identity belongs to.
+// Memberships lists the tenants an OIDC identity belongs to; for an admin,
+// every active tenant.
 func (v *Verifier) Memberships(ctx context.Context, id Identity) ([]tenant.Membership, error) {
+	if id.Admin {
+		return v.adminMemberships(ctx)
+	}
 	if id.Method != MethodOIDC || id.Subject == "" {
 		return nil, nil
 	}

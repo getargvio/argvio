@@ -26,6 +26,10 @@ type Resolver interface {
 	// Memberships lists the tenants a verified OIDC (issuer, subject) belongs
 	// to. An unknown identity yields an empty list, not an error.
 	Memberships(ctx context.Context, issuer, subject string) ([]Membership, error)
+
+	// ActiveTenants lists every active tenant, in a stable order, for admin
+	// identities that reach all tenants without memberships.
+	ActiveTenants(ctx context.Context) ([]Tenant, error)
 }
 
 // Cache is an in-memory, TTL-based Resolver in front of a Store. It caches
@@ -45,6 +49,7 @@ type cacheEntry struct {
 	resolved    *Resolved
 	found       bool
 	memberships []Membership
+	tenants     []Tenant
 	expiresAt   time.Time
 }
 
@@ -144,6 +149,29 @@ func (c *Cache) Memberships(ctx context.Context, issuer, subject string) ([]Memb
 	}
 	c.set(key, cacheEntry{memberships: ms, expiresAt: time.Now().Add(ttl)})
 	return ms, nil
+}
+
+// ActiveTenants implements Resolver. The list is cached for the short negative
+// TTL whatever its size, so a tenant created with `argvio tenant create`
+// shows up for admins quickly; a suspended one can linger in the list for that
+// long, but selecting it still goes through ResolveByTenantID, which checks
+// status.
+func (c *Cache) ActiveTenants(ctx context.Context) ([]Tenant, error) {
+	const key = "active-tenants"
+
+	c.mu.RLock()
+	entry, ok := c.entries[key]
+	c.mu.RUnlock()
+	if ok && time.Now().Before(entry.expiresAt) {
+		return entry.tenants, nil
+	}
+
+	ts, err := c.store.ListActiveTenants(ctx)
+	if err != nil {
+		return nil, err // not cached: a Postgres blip must not stick
+	}
+	c.set(key, cacheEntry{tenants: ts, expiresAt: time.Now().Add(c.negTTL)})
+	return ts, nil
 }
 
 func (c *Cache) set(key string, e cacheEntry) {

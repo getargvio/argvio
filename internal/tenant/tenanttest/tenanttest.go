@@ -4,6 +4,7 @@ package tenanttest
 
 import (
 	"context"
+	"sort"
 
 	"github.com/google/uuid"
 
@@ -61,4 +62,21 @@ func (r *Resolver) ResolveByTenantID(_ context.Context, id uuid.UUID) (*tenant.R
 
 func (r *Resolver) Memberships(_ context.Context, issuer, subject string) ([]tenant.Membership, error) {
 	return r.members[memberKey{issuer, subject}], nil
+}
+
+// ActiveTenants lists the active tenants, ordered by name then ID like the store.
+func (r *Resolver) ActiveTenants(_ context.Context) ([]tenant.Tenant, error) {
+	var out []tenant.Tenant
+	for _, res := range r.tenants {
+		if res.Tenant.Status == tenant.StatusActive {
+			out = append(out, res.Tenant)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].ID.String() < out[j].ID.String()
+	})
+	return out, nil
 }

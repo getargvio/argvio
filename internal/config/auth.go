@@ -52,6 +52,9 @@ type AuthConfig struct {
 
 	JWTSigningKey string     `koanf:"jwt_signing_key"`
 	OIDC          OIDCConfig `koanf:"oidc"`
+
+	// Admin is honoured by the metrics server only.
+	Admin AdminConfig `koanf:"admin"`
 }
 
 func (a AuthConfig) Has(m AuthMethod) bool {
@@ -111,7 +114,7 @@ func (a AuthConfig) validate() []string {
 			if err := validateAbsoluteURL(a.OIDC.IssuerURL); a.OIDC.IssuerURL != "" && err != "" {
 				errs = append(errs, "auth.oidc.issuer_url "+err)
 			}
-			errs = append(errs, a.OIDC.Introspection.validate()...)
+			errs = append(errs, a.OIDC.Introspection.validate("auth.oidc.introspection")...)
 		default:
 			errs = append(errs, "auth.methods entries must each be one of: api_key, jwt, oidc (got \""+string(m)+"\")")
 		}
@@ -119,10 +122,13 @@ func (a AuthConfig) validate() []string {
 	if a.OIDC.Introspection.Enabled && !a.Has(AuthMethodOIDC) {
 		errs = append(errs, "auth.oidc.introspection.enabled requires auth.methods to include oidc")
 	}
+	errs = append(errs, a.validateAdmin(a.Admin.Enabled())...)
 	return errs
 }
 
-func (i OIDCIntrospectionConfig) validate() []string {
+// validate checks the introspection settings; key is the config path they
+// live under, for error messages.
+func (i OIDCIntrospectionConfig) validate(key string) []string {
 	if !i.Enabled {
 		return nil
 	}
@@ -131,20 +137,20 @@ func (i OIDCIntrospectionConfig) validate() []string {
 	// provider's discovery document, which is checked at server startup.
 	if i.Endpoint != "" {
 		if err := validateAbsoluteURL(i.Endpoint); err != "" {
-			errs = append(errs, "auth.oidc.introspection.endpoint "+err)
+			errs = append(errs, key+".endpoint "+err)
 		}
 	}
 	if i.ClientID == "" {
-		errs = append(errs, "auth.oidc.introspection.client_id must be set when introspection is enabled")
+		errs = append(errs, key+".client_id must be set when introspection is enabled")
 	}
 	if i.ClientSecret == "" {
-		errs = append(errs, "auth.oidc.introspection.client_secret must be set when introspection is enabled")
+		errs = append(errs, key+".client_secret must be set when introspection is enabled")
 	}
 	if i.CacheTTL <= 0 {
-		errs = append(errs, "auth.oidc.introspection.cache_ttl must be > 0")
+		errs = append(errs, key+".cache_ttl must be > 0")
 	}
 	if i.NegativeCacheTTL <= 0 {
-		errs = append(errs, "auth.oidc.introspection.negative_cache_ttl must be > 0")
+		errs = append(errs, key+".negative_cache_ttl must be > 0")
 	}
 	return errs
 }

@@ -68,6 +68,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		s.logAuthenticated(r, id)
+		s.auditAdminTenant(r, id)
 
 		ctx := context.WithValue(r.Context(), scopeCtxKey, scope)
 		ctx = context.WithValue(ctx, identityCtxKey, id)
@@ -157,6 +158,17 @@ func (s *Server) logAuthenticated(r *http.Request, id authn.Identity) {
 		attrs = append(attrs, "tenant_id", id.Resolved.Tenant.ID.String())
 	}
 	s.log().DebugContext(r.Context(), "authenticated", attrs...)
+}
+
+// auditAdminTenant leaves a trail whenever an admin identity, which owns no
+// membership to explain its access, is given a tenant. Like logAuthenticated
+// it never logs the token or any claim beyond iss and sub.
+func (s *Server) auditAdminTenant(r *http.Request, id authn.Identity) {
+	if !id.Admin || id.Resolved == nil {
+		return
+	}
+	s.log().InfoContext(r.Context(), "admin selected tenant",
+		"iss", id.Issuer, "sub", id.Subject, "tenant_id", id.Resolved.Tenant.ID.String(), "rule", id.AdminRule)
 }
 
 func bearerToken(r *http.Request) (string, bool) {

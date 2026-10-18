@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/getargvio/argvio/internal/storage"
@@ -126,6 +127,80 @@ func TestMembers_Live(t *testing.T) {
 	t.Run("remove reports whether anything was removed", func(t *testing.T) {
 		if removed, err := store.RemoveMember(ctx, b.ID, issuer, sub); err != nil || removed {
 			t.Errorf("second remove: removed=%v err=%v", removed, err)
+		}
+	})
+}
+
+// TestActiveTenants_Live exercises the admin tenant listing against a real
+// Postgres (same ARGVIO_TEST_DSN gating as the other live tests).
+func TestActiveTenants_Live(t *testing.T) {
+	dsn := os.Getenv("ARGVIO_TEST_DSN")
+	if dsn == "" {
+		t.Skip("ARGVIO_TEST_DSN not set; skipping live active tenants test")
+	}
+	ctx := context.Background()
+	if err := storage.MigrateUp(dsn); err != nil {
+		t.Fatalf("MigrateUp: %v", err)
+	}
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgxpool.New: %v", err)
+	}
+	defer pool.Close()
+	store := NewStore(pool)
+
+	suffix := time.Now().Format("150405.000000")
+	a, err := store.CreateTenant(ctx, "active-a-"+suffix, "Active A "+suffix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone, err := store.CreateTenant(ctx, "active-gone-"+suffix, "Active Gone "+suffix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE tenants SET status = 'suspended' WHERE id = $1`, gone.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	has := func(ts []Tenant, id uuid.UUID) bool {
+		for _, x := range ts {
+			if x.ID == id {
+				return true
+			}
+		}
+		return false
+	}
+
+	t.Run("lists active tenants only", func(t *testing.T) {
+		ts, err := store.ListActiveTenants(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !has(ts, a.ID) || has(ts, gone.ID) {
+			t.Errorf("active=%v suspended listed=%v", has(ts, a.ID), has(ts, gone.ID))
+		}
+		for _, x := range ts {
+			if x.Status != StatusActive {
+				t.Errorf("tenant %s has status %q", x.ID, x.Status)
+			}
+		}
+	})
+
+	t.Run("cache serves repeats and picks up a new tenant within the short TTL", func(t *testing.T) {
+		cache := NewCache(store, 4*time.Second) // negative TTL = 1s
+		if ts, err := cache.ActiveTenants(ctx); err != nil || !has(ts, a.ID) {
+			t.Fatalf("cold: %v, %v", has(ts, a.ID), err)
+		}
+		b, err := store.CreateTenant(ctx, "active-b-"+suffix, "Active B "+suffix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ts, _ := cache.ActiveTenants(ctx); has(ts, b.ID) {
+			t.Error("warm cache should not see the new tenant yet")
+		}
+		time.Sleep(1200 * time.Millisecond)
+		if ts, _ := cache.ActiveTenants(ctx); !has(ts, b.ID) {
+			t.Error("after the TTL the new tenant should be listed")
 		}
 	})
 }

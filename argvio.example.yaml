@@ -44,6 +44,22 @@ auth:
   #     client_secret: "set via ARGVIO_AUTH__OIDC__INTROSPECTION__CLIENT_SECRET"
   #     cache_ttl: 60s
   #     negative_cache_ttl: 5s
+  #
+  # Admin identity (metrics server only): a verified token recognised as an
+  # admin sees every active tenant with no tenant_members rows. Off unless an
+  # admin recognition rule is configured; setting anything under admin: with no
+  # rule is a startup error. Access tokens are verified like auth.oidc's, and
+  # every field here that is left out falls back to the auth.oidc value, so the
+  # same IdP and audience are reused by default. Set them to keep admin tokens
+  # distinct from user tokens.
+  # admin:
+  #   oidc:
+  #     issuer_url: ""     # default: auth.oidc.issuer_url
+  #     audience: "https://admin.example.com" # default: auth.oidc.audience
+  #     required_scopes: ["argvio:admin"]     # default: auth.oidc.required_scopes
+  #     jwks_cache_ttl: 15m                   # default: auth.oidc.jwks_cache_ttl
+  #     # introspection: same keys as auth.oidc.introspection. A different
+  #     # issuer does not inherit auth.oidc's endpoint or client credentials.
 
 storage:
   dsn: "postgres://postgres:postgres@localhost:5432/argvio?sslmode=disable"
