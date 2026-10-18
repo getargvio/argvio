@@ -86,6 +86,12 @@ func authDefaults() map[string]any {
 		"auth.oidc.introspection.client_secret":      "",
 		"auth.oidc.introspection.cache_ttl":          "60s",
 		"auth.oidc.introspection.negative_cache_ttl": "5s",
+
+		"auth.admin.claim.name":  "",
+		"auth.admin.claim.value": "",
+		"auth.admin.subjects":    []string{},
+		"auth.admin.role":        "viewer",
+		"auth.admin.role_claim":  "",
 	}
 }
 

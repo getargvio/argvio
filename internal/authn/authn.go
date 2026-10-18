@@ -237,9 +237,7 @@ func (v *Verifier) authenticateOIDC(ctx context.Context, raw string, opaque bool
 		return Identity{}, preferAdminErr(err, adminErr)
 	}
 	if v.admin != nil && v.admin.verifier == nil {
-		if rule, ok := v.admin.recognize(id); ok {
-			id.Admin, id.AdminRule = true, rule
-		}
+		id, _ = v.admin.admit(id)
 	}
 	return id, nil
 }
@@ -269,7 +267,7 @@ func (v *Verifier) verifyOIDC(ctx context.Context, ov *oidc.Verifier, raw string
 // every active tenant.
 func (v *Verifier) Memberships(ctx context.Context, id Identity) ([]tenant.Membership, error) {
 	if id.Admin {
-		return v.adminMemberships(ctx)
+		return v.adminMemberships(ctx, id.Role)
 	}
 	if id.Method != MethodOIDC || id.Subject == "" {
 		return nil, nil

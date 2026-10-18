@@ -2,7 +2,10 @@ package config
 
 import (
 	"slices"
+	"strings"
 	"time"
+
+	"github.com/getargvio/argvio/internal/role"
 )
 
 // AdminConfig configures admin identities: callers of the metrics server who,
@@ -13,7 +16,30 @@ import (
 // configured (see Enabled); with none, nothing here has any effect.
 type AdminConfig struct {
 	OIDC AdminOIDCConfig `koanf:"oidc"`
+
+	// Claim recognises an admin by a claim of the verified token.
+	Claim AdminClaimConfig `koanf:"claim"`
+	// Subjects recognises an admin by the verified token's (iss, sub).
+	Subjects []string `koanf:"subjects"`
+
+	// Role is the role every admin has in every tenant (default viewer).
+	// RoleClaim, if set, names a claim of the verified token that may
+	// override it. Neither recognises anyone: they only apply once a rule
+	// above has.
+	Role      string `koanf:"role"`
+	RoleClaim string `koanf:"role_claim"`
 }
+
+// AdminClaimConfig is the claim recognition rule: a token whose claim Name is
+// the string Value, or an array containing it, is an admin. Both or neither
+// must be set.
+type AdminClaimConfig struct {
+	Name  string `koanf:"name"`
+	Value string `koanf:"value"`
+}
+
+// Enabled reports whether the rule is configured.
+func (c AdminClaimConfig) Enabled() bool { return c.Name != "" && c.Value != "" }
 
 // AdminOIDCConfig configures how an admin access token is verified. It
 // mirrors OIDCConfig, and every field left unset falls back to the
@@ -38,9 +64,31 @@ type AdminIntrospectionConfig struct {
 	NegativeCacheTTL time.Duration `koanf:"negative_cache_ttl"`
 }
 
-// Enabled reports whether any admin recognition mechanism is configured.
-// The claim rule (#9) and the subject allowlist (#10) are added here.
-func (a AdminConfig) Enabled() bool { return false }
+// Enabled reports whether any admin recognition mechanism is configured: the
+// claim rule or a non-empty subject allowlist.
+func (a AdminConfig) Enabled() bool {
+	return a.Claim.Enabled() || len(a.SubjectAllowlist()) > 0
+}
+
+// SubjectAllowlist is Subjects as the matcher uses it: entries trimmed, empty
+// ones and duplicates dropped, order kept. No wildcard is interpreted.
+func (a AdminConfig) SubjectAllowlist() []string {
+	var out []string
+	for _, s := range a.Subjects {
+		if s = strings.TrimSpace(s); s != "" && !slices.Contains(out, s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// EffectiveRole is the role admins have unless RoleClaim says otherwise.
+func (a AdminConfig) EffectiveRole() string {
+	if a.Role == "" {
+		return role.Viewer
+	}
+	return a.Role
+}
 
 // Effective resolves the verification config for admin tokens: base with
 // every field set under auth.admin.oidc.* taking precedence.
@@ -117,16 +165,23 @@ func (a AdminOIDCConfig) isZero() bool {
 // mechanism is configured (AdminConfig.Enabled); it is a parameter so the
 // checks that only apply once admin is on stay testable.
 func (a AuthConfig) validateAdmin(recognition bool) []string {
+	var errs []string
+	if (a.Admin.Claim.Name == "") != (a.Admin.Claim.Value == "") {
+		errs = append(errs, "auth.admin.claim.name and auth.admin.claim.value must be set together (or both left empty)")
+	}
+	if r := a.Admin.EffectiveRole(); !role.Known(r) {
+		errs = append(errs, "auth.admin.role must be one of: "+role.Viewer+", "+role.Admin+" (got \""+r+"\")")
+	}
+
 	if !recognition {
 		// Settings that can never take effect are a mistake worth failing
 		// on, not a silent no-op: the operator expects admin access.
-		if !a.Admin.OIDC.isZero() {
-			return []string{"auth.admin.oidc.* is set but no admin recognition mechanism is configured, so admin access would stay off; configure one or remove these settings"}
+		if !a.Admin.OIDC.isZero() || a.Admin.RoleClaim != "" || a.Admin.EffectiveRole() != role.Viewer {
+			errs = append(errs, "auth.admin.oidc.*, role or role_claim is set but no admin recognition mechanism is configured, so admin access would stay off; configure one or remove these settings")
 		}
-		return nil
+		return errs
 	}
 
-	var errs []string
 	if !a.Has(AuthMethodOIDC) {
 		errs = append(errs, "auth.admin requires auth.methods to include oidc")
 	}
