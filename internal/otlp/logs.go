@@ -70,6 +70,7 @@ func (p *Pipeline) ProcessLogs(ctx context.Context, ld plog.Logs) (accepted, rej
 			return 0, int64(ld.LogRecordCount()), "", werr
 		}
 		p.trackInstalls(ctx, rows)
+		p.trackDiscoveries(ctx, rows)
 	}
 	return accepted, rejected, rejectionSample, nil
 }
@@ -141,5 +142,17 @@ func (p *Pipeline) trackInstalls(ctx context.Context, rows []storage.LogRow) {
 	}
 	if err := p.Writer.TrackInstalls(ctx, events); err != nil {
 		p.Log.Error("otlp: tracking installs failed", "error", err, "tenant_id", p.tenantUUID())
+	}
+}
+
+// trackDiscoveries records first feature and flag use per install, failing
+// soft like trackInstalls; `argvio installs backfill` rebuilds it too.
+func (p *Pipeline) trackDiscoveries(ctx context.Context, rows []storage.LogRow) {
+	var events []storage.DiscoveryEvent
+	for _, r := range rows {
+		events = append(events, storage.DiscoveryEventsFromLog(r)...)
+	}
+	if err := p.Writer.TrackDiscoveries(ctx, events); err != nil {
+		p.Log.Error("otlp: tracking discoveries failed", "error", err, "tenant_id", p.tenantUUID())
 	}
 }

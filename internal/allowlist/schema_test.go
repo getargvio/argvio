@@ -79,3 +79,32 @@ func TestTierRankOrdering(t *testing.T) {
 		t.Errorf("tier ranks not strictly increasing: anon=%d basic=%d full=%d optin=%d", anon, basic, full, optin)
 	}
 }
+
+// Feature discovery over time since install needs an install id on the
+// activation event, and that id is only retained at basic tier and above.
+func TestFeatureActivatedCarriesInstallAndSessionIDs(t *testing.T) {
+	s := loadRealSchema(t)
+	def, ok := s.LogEventByName("cli.feature.activated")
+	if !ok {
+		t.Fatal("expected cli.feature.activated to be defined")
+	}
+	allowed := map[string]bool{}
+	for _, a := range def.AllowedAttributes {
+		allowed[a] = true
+	}
+	for _, a := range []string{"cli.activation.feature", "cli.install_id", "cli.session_id"} {
+		if !allowed[a] {
+			t.Errorf("cli.feature.activated should allow %s", a)
+		}
+	}
+	basic, _ := s.TierRank("basic")
+	for _, a := range []string{"cli.install_id", "cli.session_id", "cli.activation.feature"} {
+		attr, ok := s.AttrDefFor(a)
+		if !ok {
+			t.Fatalf("attribute %s not defined", a)
+		}
+		if rank, _ := s.TierRank(attr.MinTier); rank != basic {
+			t.Errorf("%s min_tier = %s, want basic", a, attr.MinTier)
+		}
+	}
+}

@@ -326,3 +326,85 @@ func TestProcessLogs_TracksInstalls_Live(t *testing.T) {
 		t.Errorf("install = version %q method %q first success %v", version, method, firstSuccess)
 	}
 }
+
+// feature and flag discovery events: an activation naming a feature, and an
+// invocation listing the flags passed.
+func discoveryLogs(tier string, now time.Time) plog.Logs {
+	ld := plog.NewLogs()
+	rl := ld.ResourceLogs().AppendEmpty()
+	rl.Resource().Attributes().PutStr("cli.analytics.tier", tier)
+	rl.Resource().Attributes().PutStr("cli.version", "1.2.3")
+	records := rl.ScopeLogs().AppendEmpty().LogRecords()
+
+	feature := records.AppendEmpty()
+	feature.SetEventName("cli.feature.activated")
+	feature.SetTimestamp(pcommon.NewTimestampFromTime(now.Add(-time.Minute)))
+	feature.Attributes().PutStr("cli.install_id", "install-1")
+	feature.Attributes().PutStr("cli.session_id", "session-1")
+	feature.Attributes().PutStr("cli.activation.feature", "deploy")
+
+	invoked := records.AppendEmpty()
+	invoked.SetEventName("cli.command.invoked")
+	invoked.SetTimestamp(pcommon.NewTimestampFromTime(now.Add(-2 * time.Minute)))
+	invoked.Attributes().PutStr("cli.install_id", "install-1")
+	invoked.Attributes().PutStr("cli.command.name", "deploy")
+	flags := invoked.Attributes().PutEmptySlice("cli.flag.names")
+	flags.AppendEmpty().SetStr("--force")
+	flags.AppendEmpty().SetStr("--force")
+	flags.AppendEmpty().SetStr("-v")
+	return ld
+}
+
+func TestProcessLogs_TracksDiscoveries_Live(t *testing.T) {
+	pipeline, pool, tenantID := setupPipeline(t, "basic", consent.ModeStrip)
+	ctx := context.Background()
+	now := time.Now()
+
+	if _, rejected, _, err := pipeline.ProcessLogs(ctx, discoveryLogs("basic", now)); err != nil || rejected != 0 {
+		t.Fatalf("ProcessLogs rejected=%d err=%v", rejected, err)
+	}
+	// A second batch with an earlier sighting of the same things.
+	if _, rejected, _, err := pipeline.ProcessLogs(ctx, discoveryLogs("basic", now.Add(-time.Hour))); err != nil || rejected != 0 {
+		t.Fatalf("ProcessLogs rejected=%d err=%v", rejected, err)
+	}
+
+	rows, err := pool.Query(ctx, `SELECT kind, name, first_at FROM install_discoveries
+		WHERE tenant_id = $1 AND install_id = 'install-1' ORDER BY kind, name`, tenantID)
+	if err != nil {
+		t.Fatalf("query discoveries: %v", err)
+	}
+	defer rows.Close()
+	got := map[string]time.Time{}
+	for rows.Next() {
+		var kind, name string
+		var at time.Time
+		if err := rows.Scan(&kind, &name, &at); err != nil {
+			t.Fatal(err)
+		}
+		got[kind+"/"+name] = at
+	}
+	if len(got) != 3 {
+		t.Fatalf("discoveries = %v, want feature/deploy, flag/--force and flag/-v", got)
+	}
+	if want := now.Add(-time.Hour - time.Minute); got["feature/deploy"].Sub(want).Abs() > time.Millisecond {
+		t.Errorf("feature/deploy first_at = %v, want the earlier batch's %v", got["feature/deploy"], want)
+	}
+}
+
+// Below basic tier the install id is stripped by the allowlist, so there is
+// nothing to tie a discovery to and nothing is tracked.
+func TestProcessLogs_AnonymousTierTracksNoDiscoveries_Live(t *testing.T) {
+	pipeline, pool, tenantID := setupPipeline(t, "anonymous", consent.ModeStrip)
+	ctx := context.Background()
+
+	if _, rejected, _, err := pipeline.ProcessLogs(ctx, discoveryLogs("basic", time.Now())); err != nil || rejected != 0 {
+		t.Fatalf("ProcessLogs rejected=%d err=%v", rejected, err)
+	}
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM install_discoveries WHERE tenant_id = $1`, tenantID).Scan(&n); err != nil || n != 0 {
+		t.Errorf("discoveries = %d (%v), want 0 for anonymous tier", n, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM logs WHERE tenant_id = $1 AND event_name = 'cli.feature.activated'`, tenantID).Scan(&n); err != nil || n != 1 {
+		t.Errorf("stored activation events = %d (%v), want 1: the event itself is still accepted", n, err)
+	}
+}

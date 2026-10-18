@@ -374,6 +374,8 @@ logs:
       - cli.activation.feature
       - cli.command.name
       - cli.version
+      - cli.session_id
+      - cli.install_id
 
   - event_name: cli.diagnostic.env
     allowed_attributes:
