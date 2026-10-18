@@ -35,6 +35,10 @@ indexed columns:
 
 `tenant_id`, `time`, `cli_version`, `os`, `arch`, `command_name`,
 `exit_code`, `is_ci`, `consent_tier` — present on all three tables.
+`traces` additionally promotes `peak_rss_bytes` and `cpu_time_ms` (process
+resource usage, `migrations/0009`) so a rollup can sketch them; `NULL` means
+"not reported". Ingest (`internal/otlp/usage.go`) stores zero, negative and
+implausibly large values as `NULL`, so one faulty client can't skew percentiles.
 Everything else lives in JSONB (`resource_attributes` + one of
 `span_attributes` / `log_attributes` / `datapoint_attributes`), with a GIN
 index on each for ad hoc attribute filtering (`internal/otlp/pipeline.go`'s
@@ -83,7 +87,7 @@ to run on a schedule (cron/systemd timer), not wired to any request path.
 
 ## Continuous aggregates (`migrations/0003`)
 
-Three materialized views, `WITH (timescaledb.continuous)`, refreshed
+Materialized views, `WITH (timescaledb.continuous)`, refreshed
 hourly:
 
 | View | Source | Grain | Backs |
@@ -91,6 +95,8 @@ hourly:
 | `cagg_command_stats_hourly` | `traces` (`cli.command.*` / `cli.subcommand.*` spans) | tenant × command × cli_version × os × arch × is_ci × hour | `LatencyPercentiles`, `ErrorRateSeries`, `CommandFrequency`, `CISplit` (bucket=hour) |
 | `cagg_command_stats_daily` | `cagg_command_stats_hourly` (hierarchical) | same, × day | same four, bucket=day/week/month — avoids rescanning raw `traces` for wide-range dashboard queries; week/month re-bucket this at query time (`internal/storage/query.go`'s `rebucket`) rather than materializing yet another rollup |
 | `cagg_exit_codes_hourly` (`migrations/0005`) | `traces` (same spans as above) | tenant × command × cli_version × os × arch × is_ci × exit_code × hour | `ExitCodeDistribution` — the command-stats rollups above only carry an errored/not-errored count, not a per-exit-code breakdown, hence a separate rollup rather than adding a column to `cagg_command_stats_*` |
+| `cagg_command_resources_hourly` (`migrations/0009`) | `traces` (same spans as above) | tenant × command × cli_version × os × arch × is_ci × hour | `ResourceUsage` (bucket=hour): `percentile_agg` sketches of `peak_rss_bytes` / `cpu_time_ms` plus how many runs reported each. A separate rollup rather than new columns on `cagg_command_stats_*`, for the same reason as `cagg_exit_codes_hourly` |
+| `cagg_command_resources_daily` | `cagg_command_resources_hourly` (hierarchical) | same, × day | `ResourceUsage`, bucket=day/week/month |
 | `cagg_session_activity_daily` | `logs` (`cli.session.started`) | tenant × cli_version × os × arch × is_ci × day | `SessionCohort`, `ActiveInstalls` (bucket=day/week/month) |
 
 `cagg_session_activity_daily` also carries `install_hll`, a HyperLogLog
@@ -162,7 +168,7 @@ row once their own `first_at` passes the window.
 | `traces` | 7d | 30d |
 | `logs` | 7d | 90d |
 | `metrics` | 30d | ~400d |
-| continuous aggregates | — | 90d (hourly rollups, both `cagg_command_stats_hourly` and `cagg_exit_codes_hourly`) / 730d (daily rollups) |
+| continuous aggregates | — | 90d (hourly rollups: `cagg_command_stats_hourly`, `cagg_exit_codes_hourly`, `cagg_command_resources_hourly`) / 730d (daily rollups) |
 
 Applied via migration at deploy time, and re-appliable idempotently via
 `argvio policies apply` (`internal/storage.ApplyRetentionAndCompressionPolicies`)

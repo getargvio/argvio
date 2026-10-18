@@ -108,3 +108,56 @@ func TestFeatureActivatedCarriesInstallAndSessionIDs(t *testing.T) {
 		}
 	}
 }
+
+// Process resource usage is a basic-tier measure, carried on the command span
+// only: spans feed the continuous aggregates, and the attributes are not
+// allowed on any log event.
+func TestProcessResourceUsageAttributes(t *testing.T) {
+	s := loadRealSchema(t)
+	basic, _ := s.TierRank("basic")
+	attrs := []string{"cli.process.peak_rss_bytes", "cli.process.cpu_time_ms"}
+
+	for _, a := range attrs {
+		def, ok := s.AttrDefFor(a)
+		if !ok {
+			t.Fatalf("attribute %s not defined", a)
+		}
+		if def.Type != AttrInt {
+			t.Errorf("%s type = %v, want int", a, def.Type)
+		}
+		if def.Sensitive {
+			t.Errorf("%s must not be sensitive", a)
+		}
+		if rank, _ := s.TierRank(def.MinTier); rank != basic {
+			t.Errorf("%s min_tier = %s, want basic", a, def.MinTier)
+		}
+	}
+
+	span, ok := s.MatchingSpanDef("cli.command.deploy")
+	if !ok {
+		t.Fatal("expected cli.command.* span to be defined")
+	}
+	allowed := map[string]bool{}
+	for _, a := range span.AllowedAttributes {
+		allowed[a] = true
+	}
+	for _, a := range attrs {
+		if !allowed[a] {
+			t.Errorf("cli.command.* span should allow %s", a)
+		}
+	}
+
+	for _, ev := range []string{"cli.command.invoked", "cli.command.completed"} {
+		def, ok := s.LogEventByName(ev)
+		if !ok {
+			t.Fatalf("expected %s to be defined", ev)
+		}
+		for _, a := range def.AllowedAttributes {
+			for _, u := range attrs {
+				if a == u {
+					t.Errorf("%s should not allow %s", ev, u)
+				}
+			}
+		}
+	}
+}

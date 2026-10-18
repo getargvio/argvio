@@ -184,6 +184,8 @@ hourly — see docs/schema.md). For quick local testing, without waiting:
 CALL refresh_continuous_aggregate('cagg_command_stats_hourly', NULL, NULL);
 CALL refresh_continuous_aggregate('cagg_command_stats_daily', NULL, NULL);
 CALL refresh_continuous_aggregate('cagg_exit_codes_hourly', NULL, NULL);
+CALL refresh_continuous_aggregate('cagg_command_resources_hourly', NULL, NULL);
+CALL refresh_continuous_aggregate('cagg_command_resources_daily', NULL, NULL);
 CALL refresh_continuous_aggregate('cagg_session_activity_daily', NULL, NULL);
 ```
 

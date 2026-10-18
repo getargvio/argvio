@@ -95,6 +95,26 @@ attributes:
     sensitive: false
     description: Wall-clock duration of the command invocation.
 
+  cli.process.peak_rss_bytes:
+    type: int
+    min_tier: basic
+    sensitive: false
+    description: >
+      Peak resident set size of the CLI process for this invocation, in bytes.
+      Omit when the platform cannot measure it; zero, negative and implausibly
+      large values are treated as not reported at ingest.
+
+  cli.process.cpu_time_ms:
+    type: int
+    min_tier: basic
+    sensitive: false
+    description: >
+      User plus system CPU time consumed by the CLI process for this
+      invocation, in milliseconds. May exceed wall-clock duration on
+      multi-core machines. Omit when the platform cannot measure it; zero,
+      negative and implausibly large values are treated as not reported at
+      ingest.
+
   cli.version:
     type: string
     max_length: 32
@@ -292,6 +312,8 @@ spans:
       - cli.command.name
       - cli.command.exit_code
       - cli.command.duration_ms
+      - cli.process.peak_rss_bytes
+      - cli.process.cpu_time_ms
       - cli.version
       - cli.os
       - cli.arch

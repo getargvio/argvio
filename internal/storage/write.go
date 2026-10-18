@@ -39,6 +39,7 @@ var traceColumns = []string{
 	colTime, colTenantID, "trace_id", "span_id", "parent_span_id", "span_name", "span_kind",
 	"start_time", "end_time", "duration_ms", "status_code", "status_message",
 	colCLIVersion, "os", colArch, colCommandName, colExitCode, colIsCI, colConsentTier,
+	"peak_rss_bytes", "cpu_time_ms",
 	colScopeName, colScopeVersion, colResourceAttributes, "span_attributes",
 }
 
@@ -55,6 +56,7 @@ func (w *Writer) InsertTraces(ctx context.Context, rows []TraceRow) (int64, erro
 			r.Time, r.TenantID, r.TraceID, r.SpanID, r.ParentSpanID, r.SpanName, r.SpanKind,
 			r.StartTime, r.EndTime, r.DurationMs, r.StatusCode, r.StatusMessage,
 			r.CLIVersion, r.OS, r.Arch, r.CommandName, r.ExitCode, r.IsCI, r.ConsentTier,
+			r.PeakRSSBytes, r.CPUTimeMs,
 			r.ScopeName, r.ScopeVersion, r.ResourceAttributes.json(), r.SpanAttributes.json(),
 		}, nil
 	})

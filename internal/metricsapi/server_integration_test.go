@@ -75,7 +75,15 @@ func TestMetricsAPI_EndToEnd_Live(t *testing.T) {
 		if i%4 == 0 {
 			exitCode = 1
 		}
+		// Half the runs report resource usage; the rest are from a platform
+		// that cannot measure it.
+		var rss, cpu *int64
+		if i < 10 {
+			r, c := int64(i+1)*1_000_000, int64(i+1)
+			rss, cpu = &r, &c
+		}
 		rows = append(rows, storage.TraceRow{
+			PeakRSSBytes: rss, CPUTimeMs: cpu,
 			Time: now.Add(-time.Duration(i) * time.Minute), TenantID: tenantID,
 			TraceID: uuid.NewString(), SpanID: uuid.NewString(), SpanName: "cli.command.deploy",
 			StartTime: now, EndTime: now.Add(100 * time.Millisecond), DurationMs: 100,
@@ -90,6 +98,11 @@ func TestMetricsAPI_EndToEnd_Live(t *testing.T) {
 	}
 	if _, err := pool.Exec(ctx, `CALL refresh_continuous_aggregate('cagg_command_stats_daily', NULL, NULL)`); err != nil {
 		t.Fatalf("refresh daily cagg: %v", err)
+	}
+	for _, cagg := range []string{"cagg_command_resources_hourly", "cagg_command_resources_daily"} {
+		if _, err := pool.Exec(ctx, `CALL refresh_continuous_aggregate($1, NULL, NULL)`, cagg); err != nil {
+			t.Fatalf("refresh %s: %v", cagg, err)
+		}
 	}
 
 	secret := "test-signing-secret"
@@ -196,6 +209,43 @@ func TestMetricsAPI_EndToEnd_Live(t *testing.T) {
 		}
 		return resp
 	}
+
+	t.Run("resource usage reports percentiles and the reporting sample size", func(t *testing.T) {
+		resp := get(t, "/v1/metrics/resource-usage?bucket=day&from="+url.QueryEscape(fromParam))
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200", resp.StatusCode)
+		}
+		var body struct {
+			Data []storage.ResourceUsagePoint `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		var invocations, rssReported, cpuReported int64
+		for _, p := range body.Data {
+			if p.CommandName != "deploy" {
+				t.Errorf("unexpected command %q", p.CommandName)
+			}
+			invocations += p.InvocationCount
+			rssReported += p.PeakRSSBytes.ReportedCount
+			cpuReported += p.CPUTimeMs.ReportedCount
+			if p.PeakRSSBytes.ReportedCount > 0 && (p.PeakRSSBytes.P50 == nil || p.CPUTimeMs.P99 == nil) {
+				t.Errorf("point with reported runs is missing percentiles: %+v", p)
+			}
+		}
+		if invocations != 20 || rssReported != 10 || cpuReported != 10 {
+			t.Fatalf("invocations=%d rss reported=%d cpu reported=%d, want 20/10/10", invocations, rssReported, cpuReported)
+		}
+	})
+
+	t.Run("resource usage rejects an unsupported bucket", func(t *testing.T) {
+		resp := get(t, "/v1/metrics/resource-usage?bucket=minute&from="+url.QueryEscape(fromParam))
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", resp.StatusCode)
+		}
+	})
 
 	t.Run("multi-value command filter ORs values", func(t *testing.T) {
 		resp := get(t, fmt.Sprintf("/v1/traces?from=%s&command=deploy,nonexistent&command=other", url.QueryEscape(fromParam)))
