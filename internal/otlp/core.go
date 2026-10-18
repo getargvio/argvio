@@ -52,6 +52,11 @@ func (c *core) authenticate(ctx context.Context, token string, nBytes int) (*aut
 	default:
 		return nil, err
 	}
+	// Admin identities exist only on the metrics server's verifier; one here
+	// would write into a tenant nobody granted it, so refuse it outright.
+	if id.Admin {
+		return nil, ErrForbidden
+	}
 	if !c.limiter.Allow(id, nBytes) {
 		return nil, ErrRateLimited
 	}

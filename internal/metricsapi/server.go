@@ -46,9 +46,11 @@ func NewServer(cfg config.MetricsConfig, authCfg config.AuthConfig, qb *storage.
 	if log == nil {
 		log = slog.Default()
 	}
+	verifier := authn.New(authCfg, resolver, tenant.ScopeMetricsQuery)
+	verifier.EnableAdmin(authCfg) // metrics only: the public server never does this
 	return &Server{
 		QB:                    qb,
-		Verifier:              authn.New(authCfg, resolver, tenant.ScopeMetricsQuery),
+		Verifier:              verifier,
 		MaxResultPageSize:     cfg.MaxResultPageSize,
 		DefaultResultPageSize: cfg.DefaultResultPageSize,
 		MaxTimeRangeSpan:      cfg.MaxTimeRangeSpan,

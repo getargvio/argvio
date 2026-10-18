@@ -54,11 +54,22 @@ var descriptions = map[string]string{
 	"auth.oidc.introspection.cache_ttl":          "How long an active introspection result is reused, capped by the token's own `exp`. Results are cached by the SHA-256 of the token (the token itself is never stored or logged). This is also the revocation latency: a token revoked at the provider may keep working for up to this long.",
 	"auth.oidc.introspection.negative_cache_ttl": "How long a rejection (inactive, wrong audience, missing scope) is remembered, to blunt retry storms with a bad token. Provider failures are never cached.",
 
-	"public.grpc_listen_addr": "OTLP/gRPC listen address.",
-	"public.http_listen_addr": "OTLP/HTTP listen address.",
-	"public.tls.enabled":      "Enable TLS on both listeners.",
-	"public.tls.cert_file":    "PEM certificate path (required if tls.enabled).",
-	"public.tls.key_file":     "PEM private key path (required if tls.enabled).",
+	"public.grpc_listen_addr":                          "OTLP/gRPC listen address.",
+	"public.http_listen_addr":                          "OTLP/HTTP listen address.",
+	"auth.admin.oidc.issuer_url":                       "Admin identities (metrics server only; off unless an admin recognition rule is configured, see docs/architecture.md): issuer that verifies admin access tokens. Unset = auth.oidc.issuer_url, i.e. the same IdP, which is the common case. Same exact-match rules as auth.oidc.issuer_url.",
+	"auth.admin.oidc.audience":                         "Audience every admin token's `aud` must contain. Unset = auth.oidc.audience. Set it to a different resource identifier to keep admin tokens distinct from user tokens, so a user token can never be an admin token.",
+	"auth.admin.oidc.required_scopes":                  "Scopes an admin token must carry. Empty = auth.oidc.required_scopes (so it cannot be used to require none).",
+	"auth.admin.oidc.jwks_cache_ttl":                   "Unset = auth.oidc.jwks_cache_ttl.",
+	"auth.admin.oidc.introspection.enabled":            "Verify opaque admin tokens by introspection. Unset = auth.oidc.introspection.enabled when the admin issuer is the same as auth.oidc.issuer_url, otherwise false.",
+	"auth.admin.oidc.introspection.endpoint":           "Unset = auth.oidc.introspection.endpoint when the admin issuer is the same, otherwise the admin issuer's discovery document.",
+	"auth.admin.oidc.introspection.client_id":          "Unset = auth.oidc.introspection.client_id when the admin issuer is the same. A different issuer never inherits it, so one provider's client credentials are never sent to another.",
+	"auth.admin.oidc.introspection.client_secret":      "Unset = auth.oidc.introspection.client_secret when the admin issuer is the same; never inherited by a different issuer. Prefer the ARGVIO_AUTH__ADMIN__OIDC__INTROSPECTION__CLIENT_SECRET env var over a file.",
+	"auth.admin.oidc.introspection.cache_ttl":          "Unset = auth.oidc.introspection.cache_ttl. Also the revocation latency for admin tokens.",
+	"auth.admin.oidc.introspection.negative_cache_ttl": "Unset = auth.oidc.introspection.negative_cache_ttl.",
+
+	"public.tls.enabled":   "Enable TLS on both listeners.",
+	"public.tls.cert_file": "PEM certificate path (required if tls.enabled).",
+	"public.tls.key_file":  "PEM private key path (required if tls.enabled).",
 
 	"public.max_batch_size":                    "Max spans/log records/data points per OTLP export request. Over this, the whole request is rejected (not partial success).",
 	"public.max_attribute_count":               "Max attributes per resource or per record (span/log record/data point). Over this, the record is rejected.",
@@ -214,6 +225,8 @@ func typeName(t reflect.Type) string {
 		return "duration"
 	}
 	switch t.Kind() {
+	case reflect.Pointer:
+		return typeName(t.Elem())
 	case reflect.String:
 		return "string"
 	case reflect.Bool:

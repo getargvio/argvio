@@ -141,6 +141,31 @@ already owns: anything else is `403 no_tenant_access`, and the
 (`auth.oidc.trust_tenant_id_claim` is an explicit, default-off opt-out).
 The legacy `jwt` method is unchanged.
 
+**The exception: admin identities.** A deployment owner who should see every
+tenant can opt in to an *admin identity* on the `metrics` server, so they need
+no `tenant_members` row per tenant (and none for tenants created later). It is
+off unless an admin recognition rule is configured; with none, everything above
+holds unchanged. An admin is never recognised from an unauthenticated request:
+the access token is first verified like any OIDC token (JWKS or introspection,
+`iss`, `aud`, `exp`/`nbf`, required scopes) under `auth.admin.oidc.*`, whose
+every field defaults to the matching `auth.oidc.*` value. Reusing the same IdP
+and audience is the common case, so one verification serves both. Giving admin
+tokens their own audience, scopes or issuer keeps them distinct from user
+tokens: a token is first tried against the admin verification, and only then as
+a user's. A different issuer never inherits `auth.oidc`'s introspection
+credentials, so one provider's client secret is not sent to another.
+
+A recognised admin gets access that is *virtual*: `GET /v1/tenants` lists every
+active tenant (role `viewer`) and `X-Argvio-Tenant` may select any of them,
+while an unknown or inactive tenant is still `403 no_tenant_access`. Nothing is
+written to `tenant_members`, so there is nothing to clean up, a new tenant is
+visible within the short tenant-list cache TTL (a quarter of the cache TTL, 15s
+for `serve metrics`), and removing the configuration revokes access on
+restart. Each request an admin identity makes for a tenant logs `iss`, `sub`,
+the tenant id and the matched rule, never the token. The `public` server never
+enables this: it builds its verifier without admin support and ingest rejects
+an admin identity outright, so admin access cannot write into arbitrary tenants.
+
 **Errors tell the dashboard what to do.** `401` +
 `WWW-Authenticate: Bearer error="invalid_token"`: re-authenticate. `403`
 (`no_tenant_access`, `insufficient_scope`): authenticated but not allowed;

@@ -75,6 +75,10 @@ paths:
 
         Only an OIDC identity has memberships: an API key or HS256 session JWT
         is already bound to one tenant and gets 403.
+
+        A deployment may recognise some identities as admins (see
+        `docs/architecture.md`). For one, this lists every *active* tenant
+        with the role `viewer`, with no `tenant_members` rows behind it.
       operationId: listTenants
       security:
         - BearerOIDC: []
@@ -1085,8 +1089,9 @@ components:
         exactly one tenant; required (else 400 `tenant_required`) for an OIDC
         user with several memberships. It can only select among tenants the
         caller already belongs to: any other value is 403 `no_tenant_access`,
-        for an API key or session JWT too. List the choices with
-        `GET /v1/tenants`.
+        for an API key or session JWT too. An admin identity may select any
+        active tenant; an unknown or inactive one is still 403
+        `no_tenant_access`. List the choices with `GET /v1/tenants`.
       schema: { type: string, format: uuid }
     From:
       name: from

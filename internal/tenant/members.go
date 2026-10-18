@@ -125,3 +125,23 @@ ORDER BY t.name, t.id`, issuer, subject)
 	}
 	return out, rows.Err()
 }
+
+// ListActiveTenants returns every active tenant in a stable order.
+func (s *Store) ListActiveTenants(ctx context.Context) ([]Tenant, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT id, slug, name, status FROM tenants WHERE status = $1 ORDER BY name, id`, StatusActive)
+	if err != nil {
+		return nil, fmt.Errorf("tenant: list active tenants: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Tenant
+	for rows.Next() {
+		var t Tenant
+		if err := rows.Scan(&t.ID, &t.Slug, &t.Name, &t.Status); err != nil {
+			return nil, fmt.Errorf("tenant: scan tenant: %w", err)
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}

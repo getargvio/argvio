@@ -109,6 +109,9 @@ func runPublic(cfg *config.Root, log *slog.Logger) error {
 	}, perMethod)
 
 	verifier := authn.New(cfg.Auth, tenantCache, tenant.ScopePublicIngest)
+	if cfg.Auth.Admin.Enabled() {
+		log.Warn("auth.admin is configured but the public server ignores it: admin identities are accepted by the metrics server only")
+	}
 	if err := verifier.CheckStartup(ctx); err != nil {
 		return fmt.Errorf("auth config: %w", err)
 	}
