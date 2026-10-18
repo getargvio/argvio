@@ -78,7 +78,9 @@ paths:
 
         A deployment may recognise some identities as admins (see
         `docs/architecture.md`). For one, this lists every *active* tenant
-        with the role `viewer`, with no `tenant_members` rows behind it.
+        with the admin's configured role (`viewer` unless `auth.admin.role` or
+        `auth.admin.role_claim` says otherwise), with no `tenant_members` rows
+        behind it.
       operationId: listTenants
       security:
         - BearerOIDC: []

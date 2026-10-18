@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/getargvio/argvio/internal/consent"
+	"github.com/getargvio/argvio/internal/role"
 )
 
 // StatusActive is the Tenant.Status of a tenant allowed to use the service.
@@ -88,7 +89,7 @@ type Member struct {
 }
 
 // DefaultMemberRole is the role a new membership gets when none is given.
-const DefaultMemberRole = "viewer"
+const DefaultMemberRole = role.Viewer
 
 // Membership is one tenant an identity may use, with its role there.
 type Membership struct {

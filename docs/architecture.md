@@ -155,8 +155,36 @@ tokens: a token is first tried against the admin verification, and only then as
 a user's. A different issuer never inherits `auth.oidc`'s introspection
 credentials, so one provider's client secret is not sent to another.
 
+Admins are recognised by up to two rules, and an identity is an admin if
+either matches; both look only at the verified token (the JWT payload, or the
+introspection response for an opaque token), never at a request header or the
+ID token. `auth.admin.claim.{name,value}` matches a string claim, or an element
+of an array claim, exactly and case-sensitively (name and value must be set
+together). `auth.admin.subjects` is an allowlist of `sub` values, matched
+together with the admin issuer byte for byte, so the same `sub` at another
+issuer is nobody; it is the option for an IdP that cannot add a claim, opaque
+tokens, or one or two operators. Neither rule has state: changing them takes a
+restart. The claim rule makes access depend on a claim, so it is only as
+trustworthy as the IdP's control over it: feed it from a dedicated IdP group,
+never a user-editable attribute, and pair it with `auth.admin.oidc.audience` or
+`required_scopes` if users can influence their own claims.
+
+An admin's **role** is `auth.admin.role` (default `viewer`), optionally
+replaced per token by a valid role in the claim named by `auth.admin.role_claim`.
+A claim that is missing, or holds anything but a role argvio defines, falls back
+to the configured role, and an invalid one is logged as a warning. The roles are:
+
+| Role | May do |
+|---|---|
+| `viewer` | Read a tenant's data through the `metrics` API. |
+| `admin` | The same today, since `metrics` is read-only. Reserved as the role future write endpoints will require. |
+
+Being recognised as an admin therefore never implies more than the role: the
+default is `viewer` everywhere, and the role is exposed to handlers exactly like
+a membership role (`Identity.Role`, and the `role` of `GET /v1/tenants`).
+
 A recognised admin gets access that is *virtual*: `GET /v1/tenants` lists every
-active tenant (role `viewer`) and `X-Argvio-Tenant` may select any of them,
+active tenant (with the admin's role) and `X-Argvio-Tenant` may select any of them,
 while an unknown or inactive tenant is still `403 no_tenant_access`. Nothing is
 written to `tenant_members`, so there is nothing to clean up, a new tenant is
 visible within the short tenant-list cache TTL (a quarter of the cache TTL, 15s

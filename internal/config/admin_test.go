@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -107,6 +109,22 @@ func TestAuthValidate_Admin(t *testing.T) {
 			a.OIDC.Introspection.Enabled = true
 			a.Admin.OIDC.IssuerURL = "https://admin-idp.example.com"
 		}, ""},
+		{"claim name without value", false, func(a *AuthConfig) { a.Admin.Claim.Name = "groups" }, "claim.name and auth.admin.claim.value must be set together"},
+		{"claim value without name", false, func(a *AuthConfig) { a.Admin.Claim.Value = "argvio-admins" }, "must be set together"},
+		{"claim name without value, subjects on", true, func(a *AuthConfig) { adminOn(a); a.Admin.Claim.Name = "groups" }, "must be set together"},
+		{"claim and subjects on", true, func(a *AuthConfig) {
+			adminOn(a)
+			a.Admin.Claim = AdminClaimConfig{Name: "groups", Value: "argvio-admins"}
+			a.Admin.Subjects = []string{"alice"}
+		}, ""},
+		{"unknown role", true, func(a *AuthConfig) { adminOn(a); a.Admin.Role = "superuser" }, "auth.admin.role must be one of"},
+		{"unknown role is rejected even when admin is off", false, func(a *AuthConfig) { a.Admin.Role = "superuser" }, "auth.admin.role must be one of"},
+		{"role is case-sensitive", true, func(a *AuthConfig) { adminOn(a); a.Admin.Role = "Admin" }, "auth.admin.role must be one of"},
+		{"known roles", true, func(a *AuthConfig) { adminOn(a); a.Admin.Role = "admin"; a.Admin.RoleClaim = "argvio_role" }, ""},
+		{"empty role is the default", true, func(a *AuthConfig) { adminOn(a); a.Admin.Role = "" }, ""},
+		{"viewer role alone is the default, not a setting", false, func(a *AuthConfig) { a.Admin.Role = "viewer" }, ""},
+		{"role without a recognition rule", false, func(a *AuthConfig) { a.Admin.Role = "admin" }, "no admin recognition mechanism"},
+		{"role_claim without a recognition rule", false, func(a *AuthConfig) { a.Admin.RoleClaim = "argvio_role" }, "no admin recognition mechanism"},
 		{"on, introspection endpoint must be a URL", true, func(a *AuthConfig) {
 			adminOn(a)
 			a.Admin.OIDC.Introspection = AdminIntrospectionConfig{Enabled: boolPtr(true), Endpoint: "nope"}
@@ -130,16 +148,71 @@ func TestAuthValidate_Admin(t *testing.T) {
 	}
 }
 
-// TestAdminDisabledForNow documents that, until a recognition rule exists,
-// auth.admin cannot be switched on, so a deployment behaves as it did before.
-func TestAdminDisabledForNow(t *testing.T) {
-	if (AdminConfig{}).Enabled() {
-		t.Fatal("admin must be off with nothing configured")
+func TestAdminEnabled(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  AdminConfig
+		want bool
+	}{
+		{"nothing configured", AdminConfig{}, false},
+		{"claim", AdminConfig{Claim: AdminClaimConfig{Name: "groups", Value: "g"}}, true},
+		{"claim name only", AdminConfig{Claim: AdminClaimConfig{Name: "groups"}}, false},
+		{"claim value only", AdminConfig{Claim: AdminClaimConfig{Value: "g"}}, false},
+		{"subjects", AdminConfig{Subjects: []string{"alice"}}, true},
+		{"empty subjects", AdminConfig{Subjects: []string{}}, false},
+		{"only blank subjects", AdminConfig{Subjects: []string{"", "  "}}, false},
+		{"role alone recognises nobody", AdminConfig{Role: "admin", RoleClaim: "r"}, false},
+		{"oidc settings alone recognise nobody", AdminConfig{OIDC: AdminOIDCConfig{Audience: "a"}}, false},
 	}
-	a := validOIDC()
-	a.Admin.OIDC.Audience = "https://admin"
-	if errs := a.validate(); len(errs) == 0 {
-		t.Error("an admin setting with nothing to recognise admins must fail startup validation")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.cfg.Enabled(); got != tt.want {
+				t.Errorf("Enabled = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	t.Run("an admin setting with nothing to recognise admins fails startup validation", func(t *testing.T) {
+		a := validOIDC()
+		a.Admin.OIDC.Audience = "https://admin"
+		if errs := a.validate(); len(errs) == 0 {
+			t.Error("want a validation error")
+		}
+	})
+	t.Run("a recognition rule switches admin on through validate", func(t *testing.T) {
+		a := validOIDC()
+		a.Admin.Subjects = []string{"alice"}
+		if errs := a.validate(); len(errs) != 0 {
+			t.Errorf("errors: %v", errs)
+		}
+		a.Methods = []AuthMethod{AuthMethodAPIKey}
+		a.OIDC = OIDCConfig{}
+		if errs := a.validate(); len(errs) == 0 {
+			t.Error("a rule without the oidc method must fail")
+		}
+	})
+}
+
+func TestSubjectAllowlist(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{"nil", nil, nil},
+		{"empty", []string{}, nil},
+		{"trimmed", []string{" alice ", "\tbob\n"}, []string{"alice", "bob"}},
+		{"empty entries dropped", []string{"", "alice", "  ", ""}, []string{"alice"}},
+		{"duplicates dropped, order kept", []string{"bob", "alice", " bob", "alice"}, []string{"bob", "alice"}},
+		{"case differs: both kept", []string{"alice", "Alice"}, []string{"alice", "Alice"}},
+		{"no wildcard expansion", []string{"*", "a*"}, []string{"*", "a*"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := (AdminConfig{Subjects: tt.in}).SubjectAllowlist(); !slices.Equal(got, tt.want) {
+				t.Errorf("SubjectAllowlist = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -176,6 +249,79 @@ func TestLoad_AdminKeys(t *testing.T) {
 		}
 		if o.Introspection.Enabled == nil || *o.Introspection.Enabled || o.Introspection.CacheTTL != 30*time.Second {
 			t.Errorf("introspection = %+v (enabled must be an explicit false)", o.Introspection)
+		}
+	})
+}
+
+func TestLoad_AdminRules(t *testing.T) {
+	t.Setenv("ARGVIO_STORAGE__DSN", "postgres://user:pass@localhost:5432/argvio")
+
+	t.Run("defaults: off, viewer", func(t *testing.T) {
+		c, err := Load(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a := c.Auth.Admin
+		if a.Enabled() || a.Claim != (AdminClaimConfig{}) || len(a.SubjectAllowlist()) != 0 || a.Role != "viewer" || a.RoleClaim != "" {
+			t.Errorf("admin = %+v", a)
+		}
+	})
+
+	t.Run("from env", func(t *testing.T) {
+		t.Setenv("ARGVIO_AUTH__ADMIN__CLAIM__NAME", "groups")
+		t.Setenv("ARGVIO_AUTH__ADMIN__CLAIM__VALUE", "argvio-admins")
+		t.Setenv("ARGVIO_AUTH__ADMIN__SUBJECTS", " alice , bob,,alice ")
+		t.Setenv("ARGVIO_AUTH__ADMIN__ROLE", "admin")
+		t.Setenv("ARGVIO_AUTH__ADMIN__ROLE_CLAIM", "argvio_role")
+		c, err := Load(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a := c.Auth.Admin
+		if a.Claim != (AdminClaimConfig{Name: "groups", Value: "argvio-admins"}) || a.Role != "admin" || a.RoleClaim != "argvio_role" {
+			t.Errorf("admin = %+v", a)
+		}
+		if got := a.SubjectAllowlist(); !slices.Equal(got, []string{"alice", "bob"}) {
+			t.Errorf("subjects = %q", got)
+		}
+		if !a.Enabled() {
+			t.Error("Enabled = false")
+		}
+	})
+
+	t.Run("an empty env var is off", func(t *testing.T) {
+		t.Setenv("ARGVIO_AUTH__ADMIN__SUBJECTS", "")
+		c, err := Load(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Auth.Admin.Enabled() {
+			t.Errorf("admin = %+v", c.Auth.Admin)
+		}
+	})
+
+	t.Run("from YAML, env overriding", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "argvio.yaml")
+		yaml := "auth:\n  admin:\n    subjects: [alice, bob]\n    claim: {name: roles, value: ops}\n    role: admin\n"
+		if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		c, err := Load([]string{path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		a := c.Auth.Admin
+		if !slices.Equal(a.SubjectAllowlist(), []string{"alice", "bob"}) || a.Claim.Name != "roles" || a.Claim.Value != "ops" || a.Role != "admin" {
+			t.Errorf("admin = %+v", a)
+		}
+
+		t.Setenv("ARGVIO_AUTH__ADMIN__SUBJECTS", "carol")
+		c, err = Load([]string{path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := c.Auth.Admin.SubjectAllowlist(); !slices.Equal(got, []string{"carol"}) {
+			t.Errorf("env should replace the YAML list, got %q", got)
 		}
 	})
 }

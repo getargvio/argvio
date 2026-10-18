@@ -147,6 +147,34 @@ go run ./cmd/argvio tenant member list --tenant <TENANT_ID_OR_SLUG> --dsn "$DSN"
 included). A user in several tenants calls `GET /v1/tenants` and then sends
 `X-Argvio-Tenant: <tenant id>` on every request.
 
+### Operating as an admin locally
+
+To see every tenant without a `tenant_members` row each, recognise yourself as
+an admin (`metrics` server only; see docs/architecture.md). The simplest rule
+is an allowlist of your own `sub`:
+
+```sh
+export ARGVIO_AUTH__ADMIN__SUBJECTS=<YOUR_SUB>          # comma-separated for several
+```
+
+Your `sub` is the `sub` claim of your access token, and the allowlist is
+matched together with the issuer that verified it (`auth.admin.oidc.issuer_url`,
+else `auth.oidc.issuer_url`), so the same `sub` at another IdP does not match.
+To read it, decode the payload of a token your IdP issued for the API (the
+middle segment of the JWT, base64url):
+
+```sh
+echo "$ACCESS_TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq '{iss, sub, aud}'
+```
+
+An opaque token has no payload to read; use the IdP's own user view (for
+Auth0, the user's `user_id`, e.g. `auth0|abc123`) or the provider's userinfo
+or introspection endpoint. Restart `serve metrics` after changing the list;
+removing a `sub` and restarting revokes that admin. An admin has the
+`viewer` role in every tenant unless `auth.admin.role` says otherwise.
+Instead of (or as well as) subjects, a group claim can recognise admins:
+`ARGVIO_AUTH__ADMIN__CLAIM__NAME=groups` with `ARGVIO_AUTH__ADMIN__CLAIM__VALUE=argvio-admins`.
+
 ## Continuous aggregates in local dev
 
 Continuous aggregates refresh on a schedule (`add_continuous_aggregate_policy`,
