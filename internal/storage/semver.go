@@ -102,3 +102,33 @@ func comparePreIdent(a, b string) int {
 	}
 	return strings.Compare(a, b)
 }
+
+// compareVersionKeys is a total order over reported CLI versions, for sorting
+// results oldest-first: parseable versions by semver, then versions that don't
+// parse (e.g. "nightly", a git sha) by string, then a missing version.
+// Versions that compare equal as semver ("1.0" and "v1.0.0") fall back to
+// string order, so the result never depends on the order rows arrive in.
+func compareVersionKeys(a, b *string) int {
+	rank := func(s *string) int {
+		if s == nil {
+			return 2
+		}
+		if _, ok := parseSemver(*s); ok {
+			return 0
+		}
+		return 1
+	}
+	ra, rb := rank(a), rank(b)
+	if ra != rb {
+		return ra - rb
+	}
+	if ra == 2 {
+		return 0
+	}
+	if ra == 0 {
+		if cmp, _ := compareVersions(*a, *b); cmp != 0 {
+			return cmp
+		}
+	}
+	return strings.Compare(*a, *b)
+}

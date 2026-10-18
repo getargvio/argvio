@@ -161,3 +161,65 @@ func TestProcessResourceUsageAttributes(t *testing.T) {
 		}
 	}
 }
+
+// Binary size and startup overhead are basic-tier measures carried once per
+// process on cli.session.started: size is a property of the build, so it is
+// not repeated on every command span or log.
+func TestSessionFootprintAttributes(t *testing.T) {
+	s := loadRealSchema(t)
+	basic, _ := s.TierRank("basic")
+	attrs := []string{"cli.binary.size_bytes", "cli.startup.duration_ms"}
+
+	for _, a := range attrs {
+		def, ok := s.AttrDefFor(a)
+		if !ok {
+			t.Fatalf("attribute %s not defined", a)
+		}
+		if def.Type != AttrInt {
+			t.Errorf("%s type = %v, want int", a, def.Type)
+		}
+		if def.Sensitive {
+			t.Errorf("%s must not be sensitive", a)
+		}
+		if rank, _ := s.TierRank(def.MinTier); rank != basic {
+			t.Errorf("%s min_tier = %s, want basic", a, def.MinTier)
+		}
+	}
+
+	session, ok := s.LogEventByName("cli.session.started")
+	if !ok {
+		t.Fatal("expected cli.session.started to be defined")
+	}
+	has := func(list []string, a string) bool {
+		for _, x := range list {
+			if x == a {
+				return true
+			}
+		}
+		return false
+	}
+	for _, a := range attrs {
+		if !has(session.AllowedAttributes, a) {
+			t.Errorf("cli.session.started should allow %s", a)
+		}
+	}
+
+	for _, ev := range []string{"cli.command.invoked", "cli.command.completed"} {
+		def, ok := s.LogEventByName(ev)
+		if !ok {
+			t.Fatalf("expected %s to be defined", ev)
+		}
+		for _, a := range attrs {
+			if has(def.AllowedAttributes, a) {
+				t.Errorf("%s should not allow %s", ev, a)
+			}
+		}
+	}
+	if span, ok := s.MatchingSpanDef("cli.command.deploy"); ok {
+		for _, a := range attrs {
+			if has(span.AllowedAttributes, a) {
+				t.Errorf("cli.command.* span should not allow %s", a)
+			}
+		}
+	}
+}

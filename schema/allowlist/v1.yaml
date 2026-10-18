@@ -115,6 +115,28 @@ attributes:
       negative and implausibly large values are treated as not reported at
       ingest.
 
+  cli.binary.size_bytes:
+    type: int
+    min_tier: basic
+    sensitive: false
+    description: >
+      Size of the CLI's executable on disk, in bytes. A property of the build,
+      so it is sent once per process on cli.session.started, not per command.
+      Omit when the runtime has no single binary (interpreted or bundled
+      runtimes); zero, negative and implausibly large values are treated as
+      not reported at ingest.
+
+  cli.startup.duration_ms:
+    type: int
+    min_tier: basic
+    sensitive: false
+    description: >
+      Time from process start to the point the command begins running, in
+      milliseconds. Sent once per process on cli.session.started. Omit when
+      it cannot be measured; negative and implausibly large values are
+      treated as not reported at ingest. Zero is accepted, since a fast
+      binary can start in under a millisecond.
+
   cli.version:
     type: string
     max_length: 32
@@ -384,6 +406,8 @@ logs:
       - cli.session_id
       - cli.install_id
       - cli.install.method
+      - cli.binary.size_bytes
+      - cli.startup.duration_ms
       - cli.version
       - cli.os
       - cli.arch

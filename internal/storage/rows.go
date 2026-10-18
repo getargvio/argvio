@@ -89,6 +89,10 @@ type LogRow struct {
 	IsCI        *bool
 	ConsentTier string
 
+	// Build footprint reported on cli.session.started; nil = not reported.
+	BinarySizeBytes *int64
+	StartupMs       *int64
+
 	ScopeName          *string
 	ScopeVersion       *string
 	ResourceAttributes Attrs

@@ -117,6 +117,31 @@ func (s *Server) handleFeatureDiscovery(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{responseDataKey: points})
 }
 
+// handleVersionFootprint serves /v1/metrics/version-footprint. It isn't
+// time-bucketed (one row per CLI version over the whole window, ordered by
+// version rather than by time), so it can't use serveBucketed.
+func (s *Server) handleVersionFootprint(w http.ResponseWriter, r *http.Request) {
+	scope, ok := scopeFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "missing tenant scope")
+		return
+	}
+	f, err := s.parseFilters(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	ctx, cancel := s.withQuery(r.Context())
+	defer cancel()
+	points, err := s.QB.VersionFootprint(ctx, scope, f)
+	if err != nil {
+		s.Log.Error("metricsapi: version footprint failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{responseDataKey: points})
+}
+
 // handleDimensions lists the distinct filter values a tenant has data for.
 // Deliberately takes no time range (and so skips parseFilters): option
 // lists should cover everything the tenant has, not one query window.

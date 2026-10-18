@@ -91,7 +91,7 @@ dropped.
 | Tier | Adds |
 |---|---|
 | `anonymous` | Aggregate-only shape: `cli.command.name`, `cli.command.exit_code`, `cli.command.duration_ms`, `cli.version`, `cli.os`, `cli.arch`, `cli.is_ci`. |
-| `basic` | Opaque `cli.session_id`/`cli.install_id` (random UUIDs, not identity-linked), `cli.flag.names` (names only, not values), shell/terminal metadata, the coarse `cli.error.type` category, and process resource usage on the command span (`cli.process.peak_rss_bytes`, `cli.process.cpu_time_ms`). |
+| `basic` | Opaque `cli.session_id`/`cli.install_id` (random UUIDs, not identity-linked), `cli.flag.names` (names only, not values), shell/terminal metadata, the coarse `cli.error.type` category, and process resource usage on the command span (`cli.process.peak_rss_bytes`, `cli.process.cpu_time_ms`), and build footprint on `cli.session.started` (`cli.binary.size_bytes`, `cli.startup.duration_ms`). |
 | `full` | Error diagnostics (`cli.error.message`/`stacktrace`), the full allowlisted attribute set for allowed events. |
 | `optin_plus` | Fields marked `sensitive: true` explicitly: `cli.args.raw`, `cli.env.vars`, `cli.host.name`, `cli.user.name`, `cli.path.raw`. Only accepted if **both** the tenant's ceiling is `optin_plus` and the record itself declares it. |
 

@@ -153,3 +153,65 @@ func TestInstallEventFromLog(t *testing.T) {
 		t.Errorf("got %+v, %v", e, ok)
 	}
 }
+
+func TestCompareVersionKeys(t *testing.T) {
+	// Already in the expected order: semver (numeric, prerelease before
+	// release), then non-semver by string, then missing.
+	want := []*string{
+		sp("0.9.0"), sp("1.0.0-rc.1"), sp("1.0.0"), sp("1.2.0"), sp("1.9.0"), sp("1.10.0"), sp("2.0.0"),
+		sp("dev"), sp("nightly"),
+		nil,
+	}
+	for i := range want {
+		for j := range want {
+			got := compareVersionKeys(want[i], want[j])
+			switch {
+			case i < j && got >= 0, i > j && got <= 0, i == j && got != 0:
+				t.Errorf("compareVersionKeys(%v, %v) = %d, want sign of %d", deref(want[i]), deref(want[j]), got, i-j)
+			}
+		}
+	}
+
+	// Equal as semver but spelled differently: string order breaks the tie, so
+	// the result doesn't depend on arrival order.
+	if got := compareVersionKeys(sp("1.0.0"), sp("v1.0.0")); got >= 0 {
+		t.Errorf(`compareVersionKeys("1.0.0", "v1.0.0") = %d, want < 0`, got)
+	}
+	if got := compareVersionKeys(sp("v1.0.0"), sp("1.0.0")); got <= 0 {
+		t.Errorf(`compareVersionKeys("v1.0.0", "1.0.0") = %d, want > 0`, got)
+	}
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return "<nil>"
+	}
+	return *s
+}
+
+func TestPageOf(t *testing.T) {
+	s := []int{1, 2, 3, 4, 5}
+	cases := []struct {
+		offset, limit int
+		want          []int
+	}{
+		{0, 100, []int{1, 2, 3, 4, 5}},
+		{0, 2, []int{1, 2}},
+		{3, 100, []int{4, 5}},
+		{5, 10, nil},
+		{9, 10, nil},
+		{-1, 2, []int{1, 2}},
+	}
+	for _, c := range cases {
+		got := pageOf(s, c.offset, c.limit)
+		if len(got) != len(c.want) {
+			t.Errorf("pageOf(offset=%d, limit=%d) = %v, want %v", c.offset, c.limit, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("pageOf(offset=%d, limit=%d) = %v, want %v", c.offset, c.limit, got, c.want)
+			}
+		}
+	}
+}

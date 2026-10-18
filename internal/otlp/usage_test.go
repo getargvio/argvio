@@ -51,3 +51,40 @@ func deref(p *int64) any {
 	}
 	return *p
 }
+
+func TestPopSessionFootprint(t *testing.T) {
+	i64 := func(n int64) *int64 { return &n }
+	tests := []struct {
+		name        string
+		in          map[string]any
+		wantSize    *int64
+		wantStartup *int64
+	}{
+		{"both reported", map[string]any{"cli.binary.size_bytes": int64(18874368), "cli.startup.duration_ms": int64(42)}, i64(18874368), i64(42)},
+		{"missing is not reported", map[string]any{}, nil, nil},
+		{"zero size is not reported", map[string]any{"cli.binary.size_bytes": int64(0)}, nil, nil},
+		{"zero startup is a measurement", map[string]any{"cli.startup.duration_ms": int64(0)}, nil, i64(0)},
+		{"negative is not reported", map[string]any{"cli.binary.size_bytes": int64(-1), "cli.startup.duration_ms": int64(-1)}, nil, nil},
+		{"upper bound is inclusive", map[string]any{"cli.binary.size_bytes": maxPlausibleBinarySizeBytes, "cli.startup.duration_ms": maxPlausibleStartupMs}, i64(maxPlausibleBinarySizeBytes), i64(maxPlausibleStartupMs)},
+		{"above upper bound is not reported", map[string]any{"cli.binary.size_bytes": maxPlausibleBinarySizeBytes + 1, "cli.startup.duration_ms": maxPlausibleStartupMs + 1}, nil, nil},
+		{"saturated int64 is not reported", map[string]any{"cli.binary.size_bytes": int64(1<<63 - 1), "cli.startup.duration_ms": int64(1<<63 - 1)}, nil, nil},
+		{"wrong type is not reported", map[string]any{"cli.binary.size_bytes": "big", "cli.startup.duration_ms": 1.5}, nil, nil},
+		{"measures are independent", map[string]any{"cli.binary.size_bytes": int64(-1), "cli.startup.duration_ms": int64(7)}, nil, i64(7)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := popSessionFootprint(tt.in)
+			if !eqInt64(got.BinarySizeBytes, tt.wantSize) {
+				t.Errorf("BinarySizeBytes = %v, want %v", deref(got.BinarySizeBytes), deref(tt.wantSize))
+			}
+			if !eqInt64(got.StartupMs, tt.wantStartup) {
+				t.Errorf("StartupMs = %v, want %v", deref(got.StartupMs), deref(tt.wantStartup))
+			}
+			for _, k := range []string{"cli.binary.size_bytes", "cli.startup.duration_ms"} {
+				if _, left := tt.in[k]; left {
+					t.Errorf("%s should be removed from kept, so it is not also stored in log_attributes", k)
+				}
+			}
+		})
+	}
+}

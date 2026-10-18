@@ -78,6 +78,7 @@ func (p *Pipeline) ProcessLogs(ctx context.Context, ld plog.Logs) (accepted, rej
 func (p *Pipeline) buildLogRow(rec plog.LogRecord, scope pcommon.InstrumentationScope, decision consent.Decision) storage.LogRow {
 	kept := decision.KeptAttributes
 	promo := popPromoted(kept)
+	foot := popSessionFootprint(kept)
 	resourceJSON, logJSON := p.splitRemainingAttrs(kept)
 
 	var traceID, spanID *string
@@ -120,6 +121,8 @@ func (p *Pipeline) buildLogRow(rec plog.LogRecord, scope pcommon.Instrumentation
 		CommandName:        promo.CommandName,
 		ExitCode:           promo.ExitCode,
 		IsCI:               promo.IsCI,
+		BinarySizeBytes:    foot.BinarySizeBytes,
+		StartupMs:          foot.StartupMs,
 		ConsentTier:        decision.EffectiveTier,
 		ScopeName:          strPtrOrNil(scope.Name()),
 		ScopeVersion:       strPtrOrNil(scope.Version()),
