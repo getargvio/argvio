@@ -105,6 +105,32 @@ func TestMetricsAPI_EndToEnd_Live(t *testing.T) {
 		}
 	}
 
+	// Sessions for the version footprint: 1.10.0 reports size and startup,
+	// 1.9.0 only startup, and one anonymous-tier session reports nothing.
+	var sessions []storage.LogRow
+	addSession := func(i int, version string, size, startup *int64) {
+		sessions = append(sessions, storage.LogRow{
+			Time: now.Add(-time.Duration(i) * time.Minute), TenantID: tenantID, EventName: "cli.session.started",
+			CLIVersion: strp(version), OS: strp("linux"), Arch: strp("amd64"), ConsentTier: "basic",
+			BinarySizeBytes: size, StartupMs: startup, LogAttributes: storage.Attrs{"cli.install_id": fmt.Sprintf("inst-%d", i)},
+		})
+	}
+	i64 := func(n int64) *int64 { return &n }
+	addSession(1, "1.10.0", i64(20_000_000), i64(30))
+	addSession(2, "1.10.0", i64(22_000_000), i64(50))
+	addSession(3, "1.9.0", nil, i64(80))
+	addSession(4, "1.9.0", nil, i64(90))
+	sessions = append(sessions, storage.LogRow{
+		Time: now, TenantID: tenantID, EventName: "cli.session.started",
+		CLIVersion: strp("1.10.0"), OS: strp("linux"), Arch: strp("amd64"), ConsentTier: "anonymous",
+	})
+	if _, err := w.InsertLogs(ctx, sessions); err != nil {
+		t.Fatalf("insert logs: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `CALL refresh_continuous_aggregate('cagg_session_footprint_daily', NULL, NULL)`); err != nil {
+		t.Fatalf("refresh footprint cagg: %v", err)
+	}
+
 	secret := "test-signing-secret"
 	resolver := tenant.NewCache(tenant.NewStore(pool), time.Minute)
 	srv := NewServer(config.MetricsConfig{
@@ -236,6 +262,59 @@ func TestMetricsAPI_EndToEnd_Live(t *testing.T) {
 		}
 		if invocations != 20 || rssReported != 10 || cpuReported != 10 {
 			t.Fatalf("invocations=%d rss reported=%d cpu reported=%d, want 20/10/10", invocations, rssReported, cpuReported)
+		}
+	})
+
+	t.Run("version footprint is ordered by version and says how many reported", func(t *testing.T) {
+		resp := get(t, "/v1/metrics/version-footprint?from="+url.QueryEscape(now.Add(-72*time.Hour).Format(time.RFC3339)))
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200", resp.StatusCode)
+		}
+		var body struct {
+			Data []storage.VersionFootprintPoint `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(body.Data) != 2 {
+			t.Fatalf("got %d versions, want 2: %+v", len(body.Data), body.Data)
+		}
+		old, cur := body.Data[0], body.Data[1]
+		if *old.CLIVersion != "1.9.0" || *cur.CLIVersion != "1.10.0" {
+			t.Fatalf("versions = %s, %s; want 1.9.0 then 1.10.0 (semver, not lexical)", *old.CLIVersion, *cur.CLIVersion)
+		}
+		if old.SessionCount != 2 || old.BinarySize.ReportedSessions != 0 || old.BinarySize.Median != nil || old.Startup.ReportedSessions != 2 {
+			t.Errorf("1.9.0 = %+v, want 2 sessions, no size, startup from both", old)
+		}
+		if cur.SessionCount != 3 || cur.BinarySize.ReportedSessions != 2 || cur.BinarySize.ReportedInstalls != 2 || cur.Startup.ReportedSessions != 2 {
+			t.Errorf("1.10.0 = %+v, want 3 sessions, 2 reporting size and startup from 2 installs", cur)
+		}
+		if cur.BinarySize.Min == nil || *cur.BinarySize.Min != 20_000_000 || cur.BinarySize.Max == nil || *cur.BinarySize.Max != 22_000_000 {
+			t.Errorf("1.10.0 size min/max = %v/%v, want 20000000/22000000", cur.BinarySize.Min, cur.BinarySize.Max)
+		}
+	})
+
+	t.Run("version footprint omits figures nobody reported", func(t *testing.T) {
+		resp := get(t, "/v1/metrics/version-footprint?cli_version=1.9.0&from="+url.QueryEscape(now.Add(-72*time.Hour).Format(time.RFC3339)))
+		defer resp.Body.Close()
+		var raw struct {
+			Data []map[string]any `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(raw.Data) != 1 {
+			t.Fatalf("got %d versions, want 1", len(raw.Data))
+		}
+		size, _ := raw.Data[0]["binary_size_bytes"].(map[string]any)
+		if size["reported_sessions"] != float64(0) {
+			t.Errorf("reported_sessions = %v, want 0", size["reported_sessions"])
+		}
+		for _, k := range []string{"median", "min", "max"} {
+			if _, present := size[k]; present {
+				t.Errorf("binary_size_bytes.%s should be absent when nothing reported", k)
+			}
 		}
 	})
 

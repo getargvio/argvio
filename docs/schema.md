@@ -39,6 +39,10 @@ indexed columns:
 resource usage, `migrations/0009`) so a rollup can sketch them; `NULL` means
 "not reported". Ingest (`internal/otlp/usage.go`) stores zero, negative and
 implausibly large values as `NULL`, so one faulty client can't skew percentiles.
+`logs` additionally promotes `binary_size_bytes` and `startup_ms` (build
+footprint, `migrations/0010`), carried on `cli.session.started` only; same
+`NULL` convention, with bounds in the same file (size above 0 and at most
+4 GiB; startup 0 to 1 hour, zero being a real sub-millisecond start).
 Everything else lives in JSONB (`resource_attributes` + one of
 `span_attributes` / `log_attributes` / `datapoint_attributes`), with a GIN
 index on each for ad hoc attribute filtering (`internal/otlp/pipeline.go`'s
@@ -98,6 +102,7 @@ hourly:
 | `cagg_command_resources_hourly` (`migrations/0009`) | `traces` (same spans as above) | tenant × command × cli_version × os × arch × is_ci × hour | `ResourceUsage` (bucket=hour): `percentile_agg` sketches of `peak_rss_bytes` / `cpu_time_ms` plus how many runs reported each. A separate rollup rather than new columns on `cagg_command_stats_*`, for the same reason as `cagg_exit_codes_hourly` |
 | `cagg_command_resources_daily` | `cagg_command_resources_hourly` (hierarchical) | same, × day | `ResourceUsage`, bucket=day/week/month |
 | `cagg_session_activity_daily` | `logs` (`cli.session.started`) | tenant × cli_version × os × arch × is_ci × day | `SessionCohort`, `ActiveInstalls` (bucket=day/week/month) |
+| `cagg_session_footprint_daily` (`migrations/0010`) | `logs` (`cli.session.started`) | tenant × cli_version × os × arch × is_ci × day | `VersionFootprint`: `percentile_agg` sketches of `binary_size_bytes` / `startup_ms`, size min/max, how many sessions reported each, and a HyperLogLog of the installs behind each. A separate rollup rather than new columns on `cagg_session_activity_daily`, for the same reason as `cagg_command_resources_hourly`. `VersionFootprint` merges it across the whole window (one row per version, ordered by semver in Go, `internal/storage/semver.go`) rather than bucketing by time |
 
 `cagg_session_activity_daily` also carries `install_hll`, a HyperLogLog
 sketch (`timescaledb_toolkit`'s `hyperloglog(8192, ...)`) of
@@ -168,7 +173,7 @@ row once their own `first_at` passes the window.
 | `traces` | 7d | 30d |
 | `logs` | 7d | 90d |
 | `metrics` | 30d | ~400d |
-| continuous aggregates | — | 90d (hourly rollups: `cagg_command_stats_hourly`, `cagg_exit_codes_hourly`, `cagg_command_resources_hourly`) / 730d (daily rollups) |
+| continuous aggregates | — | 90d (hourly rollups: `cagg_command_stats_hourly`, `cagg_exit_codes_hourly`, `cagg_command_resources_hourly`) / 730d (daily rollups, including `cagg_session_footprint_daily`) |
 
 Applied via migration at deploy time, and re-appliable idempotently via
 `argvio policies apply` (`internal/storage.ApplyRetentionAndCompressionPolicies`)

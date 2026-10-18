@@ -187,6 +187,7 @@ CALL refresh_continuous_aggregate('cagg_exit_codes_hourly', NULL, NULL);
 CALL refresh_continuous_aggregate('cagg_command_resources_hourly', NULL, NULL);
 CALL refresh_continuous_aggregate('cagg_command_resources_daily', NULL, NULL);
 CALL refresh_continuous_aggregate('cagg_session_activity_daily', NULL, NULL);
+CALL refresh_continuous_aggregate('cagg_session_footprint_daily', NULL, NULL);
 ```
 
 Every `/v1/metrics/*` aggregate endpoint except `/v1/traces` reads from one

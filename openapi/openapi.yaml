@@ -331,6 +331,117 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /v1/metrics/version-footprint:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
+    get:
+      summary: Binary size and startup overhead per CLI version
+      description: |
+        How a CLI's executable size and startup cost change from release to release,
+        one row per `cli.version` over the window, oldest version first.
+
+        Binary size (`cli.binary.size_bytes`) is a property of a build, and startup
+        overhead (`cli.startup.duration_ms`, process start to the point the command
+        begins running) is once per process, so both ride on `cli.session.started`
+        rather than on every command. Size reports median, min and max; startup
+        reports p50 and p95. Percentiles come from mergeable sketches, so they are
+        true percentiles over the whole window (approximate, within a few percent),
+        not averages of daily ones. Min and max are exact. Size min/max spread across
+        the os/arch builds of a version, so filter with `os` and `arch` to compare
+        like with like.
+
+        Only sessions that reported a measure are sampled. Each measure carries
+        `reported_sessions`, the sample size behind its figures, and
+        `reported_installs`, the approximate number of distinct installs behind those
+        sessions (only basic tier or above carries an install id). The binary size is
+        optional, as runtimes with no single binary omit it. `session_count -
+        reported_sessions` is how many sessions did not report a measure. When
+        `reported_sessions` is 0 the figures are absent. Missing, negative and
+        implausibly large values are treated as not reported at ingest (size must be
+        above 0 and at most 4 GiB; startup 0 to 1 hour, where 0 is a real
+        sub-millisecond start), so one faulty client cannot skew a version's figures.
+
+        Versions are ordered by semantic version (`1.9.0` before `1.10.0`, a
+        prerelease before its release). Versions that do not parse as semver, such as
+        `nightly`, follow in string order, then sessions that reported no version
+        (`cli_version` null). The order is applied before `limit` and `offset`.
+
+        Both attributes are basic tier: sessions captured at the `anonymous` tier
+        count only toward `session_count`.
+
+        Built from `cli.session.started` logs, so it is bounded by log retention
+        (about 90 days by default): history older than that exists only for days
+        already rolled up, and cannot be rebuilt once the raw logs are gone. These
+        are per-session figures, so the `command` filter does not apply.
+      operationId: versionFootprint
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/IsCI"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: One row per CLI version, oldest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/VersionFootprintPoint"
+              example:
+                data:
+                  - cli_version: "1.9.0"
+                    session_count: 1840
+                    binary_size_bytes:
+                      reported_sessions: 1790
+                      reported_installs: 412
+                      median: 18874368
+                      min: 18350080
+                      max: 19922944
+                    startup_duration_ms:
+                      reported_sessions: 1790
+                      reported_installs: 412
+                      p50: 38
+                      p95: 120
+                  - cli_version: "1.10.0"
+                    session_count: 3120
+                    binary_size_bytes:
+                      reported_sessions: 3050
+                      reported_installs: 655
+                      median: 21495808
+                      min: 20971520
+                      max: 22544384
+                    startup_duration_ms:
+                      reported_sessions: 3050
+                      reported_installs: 655
+                      p50: 52
+                      p95: 180
+                  - cli_version: "nightly"
+                    session_count: 14
+                    binary_size_bytes:
+                      reported_sessions: 0
+                      reported_installs: 0
+                    startup_duration_ms:
+                      reported_sessions: 0
+                      reported_installs: 0
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /v1/metrics/error-rate:
     parameters:
       - $ref: "#/components/parameters/TenantHeader"
@@ -1461,6 +1572,32 @@ components:
           allOf: [{ $ref: "#/components/schemas/UsageStats" }]
           description: User plus system CPU time, in milliseconds.
       required: [bucket, command_name, cli_version, invocation_count, peak_rss_bytes, cpu_time_ms]
+
+    VersionFootprintPoint:
+      type: object
+      properties:
+        cli_version: { type: string, nullable: true, description: "null for sessions that reported no version" }
+        session_count: { type: integer, description: "cli.session.started records in the window, whether or not they reported a measure." }
+        binary_size_bytes:
+          type: object
+          description: Executable size in bytes over the sessions that reported it.
+          properties:
+            reported_sessions: { type: integer, description: "Sessions that reported a size; the sample size behind the figures." }
+            reported_installs: { type: integer, description: "Approximate distinct installs behind those sessions (basic tier or above)." }
+            median: { type: number }
+            min: { type: integer }
+            max: { type: integer }
+          required: [reported_sessions, reported_installs]
+        startup_duration_ms:
+          type: object
+          description: Time from process start to the command beginning to run, in milliseconds, over the sessions that reported it.
+          properties:
+            reported_sessions: { type: integer, description: "Sessions that reported a startup time; the sample size behind the percentiles." }
+            reported_installs: { type: integer, description: "Approximate distinct installs behind those sessions (basic tier or above)." }
+            p50: { type: number }
+            p95: { type: number }
+          required: [reported_sessions, reported_installs]
+      required: [cli_version, session_count, binary_size_bytes, startup_duration_ms]
 
     ErrorRatePoint:
       type: object

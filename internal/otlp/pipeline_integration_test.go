@@ -352,6 +352,87 @@ func TestProcessLogs_Live(t *testing.T) {
 	}
 }
 
+func TestProcessLogs_SessionFootprint_Live(t *testing.T) {
+	pipeline, pool, tenantID := setupPipeline(t, "full", consent.ModeStrip)
+	ctx := context.Background()
+	now := time.Now()
+
+	// Each record is labelled by its cli.version (an anonymous-tier column)
+	// so it can be found again whatever the tier does to the rest.
+	ld := plog.NewLogs()
+	addSession := func(tier, label string, size, startup *int64) {
+		rl := ld.ResourceLogs().AppendEmpty()
+		rl.Resource().Attributes().PutStr("cli.analytics.tier", tier)
+		rec := rl.ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+		rec.SetEventName("cli.session.started")
+		rec.SetTimestamp(pcommon.NewTimestampFromTime(now))
+		rec.Attributes().PutStr("cli.version", label)
+		if size != nil {
+			rec.Attributes().PutInt("cli.binary.size_bytes", *size)
+		}
+		if startup != nil {
+			rec.Attributes().PutInt("cli.startup.duration_ms", *startup)
+		}
+	}
+	i64 := func(n int64) *int64 { return &n }
+
+	addSession("basic", "stored", i64(18874368), i64(42))
+	addSession("anonymous", "stripped", i64(18874368), i64(42))
+	addSession("basic", "zero", i64(0), i64(0))
+	addSession("basic", "negative", i64(-1), i64(-1))
+	addSession("basic", "toolarge", i64(math.MaxInt64), i64(maxPlausibleStartupMs+1))
+	addSession("basic", "omitted", nil, nil)
+	addSession("basic", "startuponly", nil, i64(7))
+
+	accepted, rejected, sample, err := pipeline.ProcessLogs(ctx, ld)
+	if err != nil {
+		t.Fatalf("ProcessLogs: %v", err)
+	}
+	if accepted != 7 || rejected != 0 {
+		t.Fatalf("accepted=%d rejected=%d (sample=%q), want 7/0", accepted, rejected, sample)
+	}
+
+	type footprintRow struct {
+		size, startup *int64
+		attrs         string
+	}
+	read := func(label string) footprintRow {
+		t.Helper()
+		var r footprintRow
+		err := pool.QueryRow(ctx,
+			`SELECT binary_size_bytes, startup_ms, log_attributes::text FROM logs WHERE tenant_id=$1 AND cli_version=$2`,
+			tenantID, label).Scan(&r.size, &r.startup, &r.attrs)
+		if err != nil {
+			t.Fatalf("read %s: %v", label, err)
+		}
+		return r
+	}
+	eq := func(p *int64, want int64) bool { return p != nil && *p == want }
+
+	if r := read("stored"); !eq(r.size, 18874368) || !eq(r.startup, 42) {
+		t.Errorf("basic tier should store the footprint, got size=%v startup=%v", r.size, r.startup)
+	} else if strings.Contains(r.attrs, "cli.binary") || strings.Contains(r.attrs, "cli.startup") {
+		t.Errorf("promoted footprint should not be duplicated in log_attributes: %s", r.attrs)
+	}
+	// Both attributes are basic-tier: an anonymous record must not keep them.
+	if r := read("stripped"); r.size != nil || r.startup != nil || strings.Contains(r.attrs, "cli.binary") || strings.Contains(r.attrs, "cli.startup") {
+		t.Errorf("anonymous tier should strip the footprint, got size=%v startup=%v attrs=%s", r.size, r.startup, r.attrs)
+	}
+	// Zero startup is a real (sub-millisecond) measurement; zero size is not.
+	if r := read("zero"); r.size != nil || !eq(r.startup, 0) {
+		t.Errorf("zero: want size NULL and startup 0, got size=%v startup=%v", r.size, r.startup)
+	}
+	for _, label := range []string{"negative", "toolarge", "omitted"} {
+		if r := read(label); r.size != nil || r.startup != nil {
+			t.Errorf("%s: want not reported (NULL), got size=%v startup=%v", label, r.size, r.startup)
+		}
+	}
+	// Binary size is optional: a runtime with no single binary still reports startup.
+	if r := read("startuponly"); r.size != nil || !eq(r.startup, 7) {
+		t.Errorf("startuponly: want size NULL and startup 7, got size=%v startup=%v", r.size, r.startup)
+	}
+}
+
 func TestProcessLogs_TracksInstalls_Live(t *testing.T) {
 	pipeline, pool, tenantID := setupPipeline(t, "basic", consent.ModeStrip)
 	ctx := context.Background()
