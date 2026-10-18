@@ -43,6 +43,7 @@ func (s *Server) router() http.Handler {
 		r.Get("/v1/traces", s.handleListTraces)
 		r.Get("/v1/meta/dimensions", s.handleDimensions)
 		r.Get("/v1/metrics/latency", serveBucketed(s, "latency percentiles", storage.BucketHour, anyBucket, s.QB.LatencyPercentiles))
+		r.Get("/v1/metrics/resource-usage", serveBucketed(s, "resource usage", storage.BucketHour, anyBucket, s.QB.ResourceUsage))
 		r.Get("/v1/metrics/error-rate", serveBucketed(s, "error rate", storage.BucketHour, anyBucket, s.QB.ErrorRateSeries))
 		r.Get("/v1/metrics/command-frequency", serveBucketed(s, "command frequency", storage.BucketHour, anyBucket, s.QB.CommandFrequency))
 		r.Get("/v1/metrics/exit-codes", serveBucketed(s, "exit code distribution", storage.BucketHour, anyBucket, s.QB.ExitCodeDistribution))

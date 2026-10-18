@@ -75,6 +75,7 @@ func (p *Pipeline) ProcessTraces(ctx context.Context, td ptrace.Traces) (accepte
 func (p *Pipeline) buildTraceRow(span ptrace.Span, scope pcommon.InstrumentationScope, decision consent.Decision, now time.Time) storage.TraceRow {
 	kept := decision.KeptAttributes
 	promo := popPromoted(kept)
+	use := popUsage(kept)
 	resourceJSON, spanJSON := p.splitRemainingAttrs(kept)
 
 	var parentSpanID *string
@@ -118,6 +119,8 @@ func (p *Pipeline) buildTraceRow(span ptrace.Span, scope pcommon.Instrumentation
 		CommandName:        promo.CommandName,
 		ExitCode:           promo.ExitCode,
 		IsCI:               promo.IsCI,
+		PeakRSSBytes:       use.PeakRSSBytes,
+		CPUTimeMs:          use.CPUTimeMs,
 		ConsentTier:        decision.EffectiveTier,
 		ScopeName:          scopeName,
 		ScopeVersion:       scopeVersion,

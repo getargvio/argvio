@@ -3,6 +3,7 @@ package otlp
 import (
 	"context"
 	"log/slog"
+	"math"
 	"os"
 	"strings"
 	"testing"
@@ -184,6 +185,80 @@ func TestProcessTraces_TierStripping_Live(t *testing.T) {
 	}
 	if strings.Contains(string(spanAttrs), "SECRET") {
 		t.Errorf("cli.args.raw should have been stripped at basic tier, but found in span_attributes: %s", spanAttrs)
+	}
+}
+
+func TestProcessTraces_ResourceUsage_Live(t *testing.T) {
+	pipeline, pool, tenantID := setupPipeline(t, "full", consent.ModeStrip)
+	ctx := context.Background()
+	now := time.Now()
+
+	td := ptrace.NewTraces()
+	addSpan := func(tier, command string, rss, cpu *int64) {
+		rs := td.ResourceSpans().AppendEmpty()
+		rs.Resource().Attributes().PutStr("cli.analytics.tier", tier)
+		rs.Resource().Attributes().PutStr("cli.version", "1.0.0")
+		span := rs.ScopeSpans().AppendEmpty().Spans().AppendEmpty()
+		span.SetName("cli.command." + command)
+		id := uuid.New()
+		span.SetTraceID(pcommon.TraceID(id))
+		span.SetSpanID(pcommon.SpanID(id[:8]))
+		span.SetStartTimestamp(pcommon.NewTimestampFromTime(now))
+		span.SetEndTimestamp(pcommon.NewTimestampFromTime(now.Add(20 * time.Millisecond)))
+		span.Attributes().PutStr("cli.command.name", command)
+		if rss != nil {
+			span.Attributes().PutInt("cli.process.peak_rss_bytes", *rss)
+		}
+		if cpu != nil {
+			span.Attributes().PutInt("cli.process.cpu_time_ms", *cpu)
+		}
+	}
+	i64 := func(n int64) *int64 { return &n }
+
+	addSpan("basic", "stored", i64(52428800), i64(310))
+	addSpan("anonymous", "stripped", i64(52428800), i64(310))
+	addSpan("basic", "negative", i64(-1), i64(-5))
+	addSpan("basic", "zero", i64(0), i64(0))
+	addSpan("basic", "toolarge", i64(math.MaxInt64), i64(maxPlausibleCPUTimeMs+1))
+	addSpan("basic", "omitted", nil, nil)
+
+	accepted, rejected, sample, err := pipeline.ProcessTraces(ctx, td)
+	if err != nil {
+		t.Fatalf("ProcessTraces: %v", err)
+	}
+	if accepted != 6 || rejected != 0 {
+		t.Fatalf("accepted=%d rejected=%d (sample=%q), want 6/0", accepted, rejected, sample)
+	}
+
+	type usageRow struct {
+		rss, cpu *int64
+		attrs    string
+	}
+	read := func(command string) usageRow {
+		t.Helper()
+		var r usageRow
+		err := pool.QueryRow(ctx,
+			`SELECT peak_rss_bytes, cpu_time_ms, span_attributes::text FROM traces WHERE tenant_id=$1 AND command_name=$2`,
+			tenantID, command).Scan(&r.rss, &r.cpu, &r.attrs)
+		if err != nil {
+			t.Fatalf("read %s: %v", command, err)
+		}
+		return r
+	}
+
+	if r := read("stored"); r.rss == nil || *r.rss != 52428800 || r.cpu == nil || *r.cpu != 310 {
+		t.Errorf("basic tier should store usage, got rss=%v cpu=%v", r.rss, r.cpu)
+	} else if strings.Contains(r.attrs, "cli.process") {
+		t.Errorf("promoted usage should not be duplicated in span_attributes: %s", r.attrs)
+	}
+	// Both attributes are basic-tier: an anonymous record must not keep them.
+	if r := read("stripped"); r.rss != nil || r.cpu != nil || strings.Contains(r.attrs, "cli.process") {
+		t.Errorf("anonymous tier should strip usage, got rss=%v cpu=%v attrs=%s", r.rss, r.cpu, r.attrs)
+	}
+	for _, command := range []string{"negative", "zero", "toolarge", "omitted"} {
+		if r := read(command); r.rss != nil || r.cpu != nil {
+			t.Errorf("%s: want not reported (NULL), got rss=%v cpu=%v", command, r.rss, r.cpu)
+		}
 	}
 }
 

@@ -59,6 +59,10 @@ type TraceRow struct {
 	IsCI        *bool
 	ConsentTier string
 
+	// Process resource usage reported by the CLI; nil = not reported.
+	PeakRSSBytes *int64
+	CPUTimeMs    *int64
+
 	ScopeName          *string
 	ScopeVersion       *string
 	ResourceAttributes Attrs

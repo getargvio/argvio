@@ -252,6 +252,85 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /v1/metrics/resource-usage:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
+    get:
+      summary: Peak memory and CPU time percentiles per command and version, time-bucketed
+      description: |
+        p50/p95/p99 of `cli.process.peak_rss_bytes` and `cli.process.cpu_time_ms`
+        per command and CLI version, from the same kind of mergeable sketches as
+        `/v1/metrics/latency` (so day/week/month buckets are true percentiles over
+        the period, not averages of hourly ones).
+
+        Only runs that reported a measure are sampled: zero, negative, implausibly
+        large and missing values count as "not reported" (SDKs on platforms that
+        cannot measure omit them). Each measure carries `reported_count`, the
+        sample size behind its percentiles; `invocation_count - reported_count`
+        is how many runs did not report it. When `reported_count` is 0 the
+        percentiles are absent.
+
+        Both attributes are basic-tier: runs captured at the `anonymous` tier
+        do not report them and count only toward `invocation_count`.
+      operationId: resourceUsage
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/Command"
+        - $ref: "#/components/parameters/IsCI"
+        - $ref: "#/components/parameters/Bucket"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Per-bucket, per-command, per-version resource usage percentiles.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ResourceUsagePoint"
+              example:
+                data:
+                  - bucket: "2026-08-12T00:00:00Z"
+                    command_name: "deploy"
+                    cli_version: "1.4.2"
+                    invocation_count: 483
+                    peak_rss_bytes:
+                      reported_count: 430
+                      p50: 52428800
+                      p95: 104857600
+                      p99: 209715200
+                    cpu_time_ms:
+                      reported_count: 430
+                      p50: 120
+                      p95: 410
+                      p99: 980
+                  - bucket: "2026-08-12T00:00:00Z"
+                    command_name: "deploy"
+                    cli_version: "1.3.0"
+                    invocation_count: 37
+                    peak_rss_bytes:
+                      reported_count: 0
+                    cpu_time_ms:
+                      reported_count: 0
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /v1/metrics/error-rate:
     parameters:
       - $ref: "#/components/parameters/TenantHeader"
@@ -1357,6 +1436,31 @@ components:
         p95_ms: { type: number, nullable: true }
         p99_ms: { type: number, nullable: true }
       required: [bucket, command_name, invocation_count]
+
+    UsageStats:
+      type: object
+      description: Distribution of one resource measure over the runs that reported it.
+      properties:
+        reported_count: { type: integer, description: "Runs that reported this measure; the sample size behind the percentiles." }
+        p50: { type: number }
+        p95: { type: number }
+        p99: { type: number }
+      required: [reported_count]
+
+    ResourceUsagePoint:
+      type: object
+      properties:
+        bucket: { type: string, format: date-time }
+        command_name: { type: string }
+        cli_version: { type: string, nullable: true }
+        invocation_count: { type: integer }
+        peak_rss_bytes:
+          allOf: [{ $ref: "#/components/schemas/UsageStats" }]
+          description: Peak resident set size, in bytes.
+        cpu_time_ms:
+          allOf: [{ $ref: "#/components/schemas/UsageStats" }]
+          description: User plus system CPU time, in milliseconds.
+      required: [bucket, command_name, cli_version, invocation_count, peak_rss_bytes, cpu_time_ms]
 
     ErrorRatePoint:
       type: object
