@@ -6,11 +6,10 @@ migrations 0002–0005 and `internal/storage/query.go`.
 
 ## Goal
 
-Move the dashboard from "how much is each command used" to "do new users
+Move the analytics from "how much is each command used" to "do new users
 succeed, where do they give up, and what is breaking for whom". That covers
-the Funnel & Lifecycle, UX & Friction, and parts of the Usage and Errors
-categories of metric gaps the UI showed (now tracked as issues in
-`getargvio/ui`).
+funnel and lifecycle, UX friction, and parts of the usage and error
+analytics.
 
 ## What the code already does (and the TODO gets wrong)
 
@@ -106,12 +105,12 @@ it stays small relative to the hypertables.
 - `GET /v1/metrics/version-transitions`: upgrades/downgrades by version
   pair.
 
-### 4. UI
+### 4. Coverage
 
-Fill in `FunnelView`, `UxFrictionView` and the Usage gaps, removing the
-matching `GapPlaceholder`s. Every journey chart shows its coverage: the
-share of sessions that carried an `install_id`, since anonymous-tier
-sessions can't be followed.
+Every install-based endpoint is only as complete as the share of sessions
+that carried an `install_id`, since anonymous-tier sessions can't be
+followed. `/v1/metrics/install-coverage` exposes that share so consumers
+can state it next to the numbers.
 
 ### 5. Prerequisite for slicing
 
@@ -125,14 +124,14 @@ endpoints; decide separately whether to generalize.
 
 1. **Retention vs `installs`**: purge rows by `last_seen` against the
    tenant's retention, and treat "returning after the retention window" as
-   new, with that stated in the UI.
+   new, and the API documents that.
 2. **Tier of error category**: lower `cli.error.type` from `full` to
    `basic` in the allowlist and in both SDKs (which currently gate the
    `cli.error.raised` event at `full`). The raw message and stack stay at
    `full`/`optin_plus`.
 3. **Coverage**: journey metrics need `basic`+ (`install_id`), so they cover
-   consenting users only. The UI shows the share of sessions that carried an
-   `install_id`.
+   consenting users only. The API exposes the share of sessions that carried an
+   `install_id` (`/v1/metrics/install-coverage`).
 
 ## Order of work
 
@@ -144,15 +143,13 @@ endpoints; decide separately whether to generalize.
 3. `installs` table, migration and ingest upsert; backfill from the last 90
    days of `cli.session.started`.
 4. `funnel`, `activation`, `version-transitions` endpoints.
-5. UI views.
 
 Steps 1 and 2 are independent and can be built in parallel.
 
 ## Progress
 
 - Step 1 (partial): `/v1/metrics/error-types` and `/v1/metrics/friction`
-  (help views, interrupted runs) are implemented with the Errors and UX
-  Friction views. Repeated failure of the same command by one install is
+  (help views, interrupted runs) are implemented. Repeated failure of the same command by one install is
   not in `friction` yet; it needs `install_id` on command outcomes (step 2).
 - Step 2 (done, unreleased): allowlist and both SDKs.
   - `cli.error.type` is now `basic` tier, and both SDKs emit
@@ -193,24 +190,47 @@ Steps 1 and 2 are independent and can be built in parallel.
     friction signal, which needs a per-install command history that the
     installs table doesn't keep. Doing it from raw `cli.command.completed`
     logs (bounded by log retention) is the likely route.
-- Step 5 (done, unreleased, in the `ui` repo): Funnel & Lifecycle shows the
-  install funnel, time to first success and version changes; UX & Friction
-  shows activation time. Every install-based panel (including the existing
-  active installs and retention) states the share of sessions that carried an
-  install id. Not visually checked against live data.
-- Follow-up (done, unreleased): two more endpoints over install state, both
-  with Usage panels:
+- Follow-up (done, unreleased): two more endpoints over install state:
   - `GET /v1/metrics/install-methods`: installs per first-seen bucket by
     vendor-reported install method (null when never reported).
   - `GET /v1/metrics/new-vs-returning`: distinct installs active per bucket,
     split by first seen in that bucket vs earlier (raw session logs joined to
     `installs`, so bounded by log retention; installs without a row are left
     out).
-  - The dashboard's "gap" banners now say why: needs new telemetry, no view
-    yet (crash payloads exist for opt-in sessions), or product decision.
 - Validated end to end against a local stack with both demo CLIs. The
   new-vs-returning demo data backdates five installs' first sighting, since
   the CLIs can't produce an earlier first run.
-- Remaining from this design: typo detection (new allowlisted attribute plus
-  framework support), repeated-failure friction signal (per-install command
-  history), session length / command sequences, feature discovery.
+- Feature and flag discovery (#17, done, unreleased, server side only):
+  - Definition: an install *discovers* a feature the first time it emits
+    `cli.feature.activated` for it (named by `cli.activation.feature`), and a
+    flag the first time a `cli.command.invoked` carries its name in
+    `cli.flag.names`. Time to discovery is that first use minus
+    `installs.first_seen`, so it is measured from when argvio first saw the
+    install, not from when it was installed. A gap that comes out negative
+    (a late session start) counts as zero.
+  - Allowlist: `cli.feature.activated` now permits `cli.install_id` and
+    `cli.session_id` (both `basic` tier, so anonymous-tier activations stay
+    unlinked and are not counted). The SDKs have to start emitting the event
+    with the install id (`getargvio/argvio-go#2`, `getargvio/argvio-node#5`);
+    until they do, only flags appear.
+  - Data source: a persisted `install_discoveries(tenant, install, kind,
+    name, first_at)` table (migration 0008), upserted at ingest like
+    `installs`, rather than raw logs. Logs are kept ~90 days, so an old
+    install's "first" use would look late (or be missing) once the real
+    first use aged out. Rows live as long as their install: the retention
+    sweep deletes them with it (and stale rows whose install has no row), so
+    an install returning after the retention window counts as new, with all
+    its discoveries. `argvio installs backfill` rebuilds them from retained
+    logs; uses older than that can't be recovered, so those installs look
+    later than they were. Vendor-supplied names are bounded at 64 characters
+    by the allowlist, and the endpoint returns only the top-K per kind.
+  - `GET /v1/metrics/feature-discovery`: for the installs first seen in the
+    window, per feature and flag (`kind` narrows it), the installs that have
+    used it, how many did within 1/7/30 days of first seen, and the median
+    seconds to discovery (discoverers only). `limit`/`offset` rank by installs
+    per kind. Like the funnel, discoveries count whenever they happened, so
+    recent cohorts are still maturing. Install-level, so basic tier and above
+    only (`/v1/metrics/install-coverage`).
+- Remaining from this design, tracked as issues: typo detection (#21),
+  repeated-failure and retry signals (#16), session length and command
+  sequences (#14).

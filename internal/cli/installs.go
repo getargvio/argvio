@@ -26,11 +26,14 @@ func newInstallsBackfillCommand() *cobra.Command {
 		Use:   "backfill",
 		Short: "Rebuild install state from stored logs",
 		Long: `Rebuild the installs table from cli.session.started and
-cli.command.completed logs still in storage, oldest first.
+cli.command.completed logs still in storage, oldest first, and the
+install_discoveries table (first use of each feature and flag) from
+cli.feature.activated and cli.command.invoked logs.
 
-Run it once after migrating to 0006. It is safe to rerun, but version changes
-older than what live ingest has since recorded for an install can't be
-recovered by a rerun. Installs older than log retention don't appear.`,
+Run it once after migrating to 0006 (installs) and 0008 (discoveries). It is
+safe to rerun, but version changes older than what live ingest has since
+recorded for an install can't be recovered by a rerun. Installs and
+discoveries older than log retention don't appear.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if days <= 0 {
 				return fmt.Errorf("--days must be positive")
@@ -51,6 +54,12 @@ recovered by a rerun. Installs older than log retention don't appear.`,
 				return err
 			}
 			fmt.Printf("installs backfill complete: replayed %d events\n", n)
+
+			d, err := storage.BackfillDiscoveries(ctx, pool, time.Now().Add(-time.Duration(days)*24*time.Hour))
+			if err != nil {
+				return err
+			}
+			fmt.Printf("discoveries backfill complete: replayed %d first uses\n", d)
 			return nil
 		},
 	}

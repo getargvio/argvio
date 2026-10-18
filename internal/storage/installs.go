@@ -321,7 +321,8 @@ ORDER BY time ASC`, since)
 }
 
 // SweepTenantInstalls deletes one tenant's installs not seen for more than
-// days, and their version changes. It returns the number of installs deleted.
+// days, and their version changes and discoveries. It returns the number of
+// installs deleted.
 func SweepTenantInstalls(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID, days int) (int64, error) {
 	return sweepInstalls(ctx, pool, days, `tenant_id = $2`, tenantID)
 }
@@ -349,9 +350,21 @@ func sweepInstalls(ctx context.Context, pool *pgxpool.Pool, days int, tenantPred
 	if _, err := tx.Exec(ctx, `DELETE FROM install_version_changes WHERE at < $1 AND `+tenantPred, cutoff, tenantArg); err != nil {
 		return 0, fmt.Errorf("storage: sweep install version changes: %w", err)
 	}
+	// Before the installs themselves, which is how the swept ones are found.
+	if _, err := tx.Exec(ctx, `DELETE FROM install_discoveries WHERE (tenant_id, install_id) IN (
+		SELECT tenant_id, install_id FROM installs WHERE last_seen < $1 AND `+tenantPred+`)`, cutoff, tenantArg); err != nil {
+		return 0, fmt.Errorf("storage: sweep install discoveries: %w", err)
+	}
 	tag, err := tx.Exec(ctx, `DELETE FROM installs WHERE last_seen < $1 AND `+tenantPred, cutoff, tenantArg)
 	if err != nil {
 		return 0, fmt.Errorf("storage: sweep installs: %w", err)
+	}
+	// Discoveries whose install has no row (its session start never arrived,
+	// or it was swept earlier) age out on their own timestamp.
+	if _, err := tx.Exec(ctx, `DELETE FROM install_discoveries WHERE first_at < $1 AND `+tenantPred+`
+		AND NOT EXISTS (SELECT 1 FROM installs i
+		                WHERE i.tenant_id = install_discoveries.tenant_id AND i.install_id = install_discoveries.install_id)`, cutoff, tenantArg); err != nil {
+		return 0, fmt.Errorf("storage: sweep orphan install discoveries: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("storage: sweep installs: %w", err)

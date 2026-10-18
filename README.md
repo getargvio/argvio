@@ -13,7 +13,7 @@ the operator CLI are all subcommands of it:
 - **`argvio serve metrics`** — read-oriented REST API: filtering +
   aggregation (percentile latencies, error rate, command frequency,
   exit-code distribution, CI-vs-interactive split, session cohorts, active
-  installs, cohort retention) plus a distinct filter-values lookup, over
+  installs, cohort retention, feature and flag discovery) plus a distinct filter-values lookup, over
   ingested telemetry. Internal/trusted-tenant-facing.
 - **`argvio migrate` / `tenant` / `apikey` / `policies` / `retention`** —
   operator CLI: migrations, tenant/API-key seeding, Timescale policy

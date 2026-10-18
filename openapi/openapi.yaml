@@ -665,6 +665,101 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /v1/metrics/feature-discovery:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
+    get:
+      summary: How quickly installs discover each feature and flag after first being seen
+      description: >
+        An install discovers a feature the first time it emits cli.feature.activated
+        for it (named by cli.activation.feature), and a flag the first time a
+        cli.command.invoked carries its name in cli.flag.names. Time to discovery is
+        that first use minus the install's first_seen, so it is measured from when
+        argvio first saw the install, not from when it was installed.
+
+
+        The cohort is the installs first seen in the window (like
+        /v1/metrics/install-funnel). Per feature or flag: installs is how many of the
+        cohort have ever used it, discovered_within_1d/7d/30d how many did so within
+        that long of first_seen (divide by cohort_size for the share of the cohort),
+        and median_seconds the median time to discovery. Discoveries count whenever
+        they happened, even after the window, so recent cohorts are still maturing and
+        their within-N-day shares understate the eventual figure; choose a window that
+        ended at least N days ago for a fair N-day share. The median covers
+        discoverers only, so it says how fast the ones who found it were, not how long
+        the rest will take. A feature nobody used is absent, not zero.
+
+
+        Names are vendor-supplied strings, so the response is bounded: limit and
+        offset apply per kind to the ranking by installs (ties by name), and
+        max_result_page_size caps limit. Without kind, features and flags are both
+        returned, each ranked on its own and features first.
+
+
+        First uses are recorded at ingest and kept for as long as the install itself
+        (purged once an install has not been seen for the tenant's logs retention, so
+        an install returning after that counts as new), so unlike log-backed metrics
+        this is not bounded by log retention. Events from before the tracking existed
+        can only be rebuilt from retained logs (argvio installs backfill); an install
+        whose real first use is older than that looks later than it was.
+
+
+        Install-level, so only installs that reported a cli.install_id (basic consent
+        tier or above) appear; see /v1/metrics/install-coverage for how much traffic
+        that is. cli_version means "first seen on this version"; os and arch are the
+        install's most recent values; command and is_ci filters do not apply. SDKs
+        must emit cli.feature.activated with cli.install_id for features to appear.
+      operationId: featureDiscovery
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/DiscoveryKind"
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: One row per feature or flag, features first, each kind ranked by installs.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DiscoveryPoint"
+              example:
+                data:
+                  - kind: feature
+                    name: deploy
+                    cohort_size: 120
+                    installs: 84
+                    discovered_within_1d: 40
+                    discovered_within_7d: 70
+                    discovered_within_30d: 81
+                    median_seconds: 7200
+                  - kind: flag
+                    name: "--dry-run"
+                    cohort_size: 120
+                    installs: 31
+                    discovered_within_1d: 6
+                    discovered_within_7d: 15
+                    discovered_within_30d: 27
+                    median_seconds: 432000
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /v1/metrics/install-methods:
     parameters:
       - $ref: "#/components/parameters/TenantHeader"
@@ -1176,6 +1271,12 @@ components:
       required: false
       description: Cohort or change granularity. week starts Monday; all boundaries are UTC.
       schema: { type: string, enum: [day, week, month], default: week }
+    DiscoveryKind:
+      name: kind
+      in: query
+      required: false
+      description: Restrict to features or flags. Omit for both.
+      schema: { type: string, enum: [feature, flag] }
     RetentionBucket:
       name: bucket
       in: query
@@ -1331,6 +1432,19 @@ components:
         p50_seconds: { type: number, nullable: true }
         p90_seconds: { type: number, nullable: true }
       required: [bucket, cohort_size, activated_count, p50_seconds, p90_seconds]
+
+    DiscoveryPoint:
+      type: object
+      properties:
+        kind: { type: string, enum: [feature, flag] }
+        name: { type: string, description: "Vendor-supplied feature name, or flag name as passed (values excluded)" }
+        cohort_size: { type: integer, description: "Installs first seen in the window; the denominator for the shares" }
+        installs: { type: integer, description: "Cohort installs that have ever used it" }
+        discovered_within_1d: { type: integer, description: "Cohort installs whose first use was within 1 day of first_seen" }
+        discovered_within_7d: { type: integer }
+        discovered_within_30d: { type: integer }
+        median_seconds: { type: number, description: "Median first-use minus first_seen over discoverers; negative gaps count as 0" }
+      required: [kind, name, cohort_size, installs, discovered_within_1d, discovered_within_7d, discovered_within_30d, median_seconds]
 
     VersionChangePoint:
       type: object

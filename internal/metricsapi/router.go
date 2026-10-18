@@ -53,6 +53,7 @@ func (s *Server) router() http.Handler {
 		r.Get("/v1/metrics/install-methods", serveBucketed(s, "install methods", storage.BucketWeek, dailyBucket, s.QB.InstallMethods))
 		r.Get("/v1/metrics/new-vs-returning", serveBucketed(s, "new vs returning", storage.BucketWeek, dailyBucket, s.QB.NewVsReturning))
 		r.Get("/v1/metrics/version-changes", serveBucketed(s, "version changes", storage.BucketWeek, dailyBucket, s.QB.VersionChanges))
+		r.Get("/v1/metrics/feature-discovery", s.handleFeatureDiscovery)
 		r.Get("/v1/metrics/install-coverage", serveBucketed(s, "install coverage", storage.BucketDay, dailyBucket, s.QB.InstallCoverage))
 		r.Get("/v1/metrics/ci-split", serveBucketed(s, "ci split", storage.BucketHour, anyBucket, s.QB.CISplit))
 		r.Get("/v1/metrics/cohorts", serveBucketed(s, "cohorts", storage.BucketDay, dailyBucket, s.QB.SessionCohort))

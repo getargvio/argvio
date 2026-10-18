@@ -86,6 +86,37 @@ func serveBucketed[T any](s *Server, name string, def storage.Bucket, allowed []
 	}
 }
 
+// handleFeatureDiscovery serves /v1/metrics/feature-discovery. It isn't
+// time-bucketed (discovery is measured as time since install, not on the
+// calendar), so it can't use serveBucketed; the optional `kind` param narrows
+// it to features or flags.
+func (s *Server) handleFeatureDiscovery(w http.ResponseWriter, r *http.Request) {
+	scope, ok := scopeFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "missing tenant scope")
+		return
+	}
+	f, err := s.parseFilters(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	kind := r.URL.Query().Get("kind")
+	if kind != "" && kind != storage.DiscoveryFeature && kind != storage.DiscoveryFlag {
+		writeError(w, http.StatusBadRequest, "invalid_request", "kind must be feature or flag")
+		return
+	}
+	ctx, cancel := s.withQuery(r.Context())
+	defer cancel()
+	points, err := s.QB.FeatureDiscovery(ctx, scope, f, kind)
+	if err != nil {
+		s.Log.Error("metricsapi: feature discovery failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{responseDataKey: points})
+}
+
 // handleDimensions lists the distinct filter values a tenant has data for.
 // Deliberately takes no time range (and so skips parseFilters): option
 // lists should cover everything the tenant has, not one query window.
