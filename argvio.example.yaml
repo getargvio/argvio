@@ -89,6 +89,10 @@ public:
   # Distinct cli.error.reason values kept per tenant; new ones past the cap
   # are stored as "other" (docs/allowlist.md).
   max_error_reasons_per_tenant: 100
+  # Distinct cli.counter names kept per tenant, and labels kept per name; new
+  # ones past a cap are stored as "other" (docs/allowlist.md).
+  max_counter_names_per_tenant: 200
+  max_counter_labels_per_name: 50
   rate_limit_requests_per_second: 200
   rate_limit_bytes_per_second: 5000000
   rate_limit_burst: 400

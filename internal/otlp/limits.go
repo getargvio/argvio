@@ -19,6 +19,8 @@ type Bounds struct {
 	MaxTimestampSkewPast          time.Duration
 	MaxTimestampSkewFuture        time.Duration
 	MaxErrorReasonsPerTenant      int
+	MaxCounterNamesPerTenant      int
+	MaxCounterLabelsPerName       int
 }
 
 // checkTimestamp reports whether ts is within [now-past, now+future]. A

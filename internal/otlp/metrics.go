@@ -3,11 +3,13 @@ package otlp
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 
+	"github.com/getargvio/argvio/internal/allowlist"
 	"github.com/getargvio/argvio/internal/consent"
 	"github.com/getargvio/argvio/internal/storage"
 )
@@ -42,13 +44,26 @@ func (p *Pipeline) ProcessMetrics(ctx context.Context, md pmetric.Metrics) (acce
 				metric := metrics.At(k)
 
 				metricDef, found := p.Schema.MetricByName(metric.Name())
-				def := consent.EventDef{Found: found, AllowedAttributes: metricDef.AllowedAttributes}
+				def := consent.EventDef{Found: found, AllowedAttributes: metricDef.AllowedAttributes, RequiredAttributes: metricDef.RequiredAttributes}
+
+				if reason := checkMetricShape(metricDef, metric); reason != "" {
+					rejected += int64(metricDataPointCount(metric))
+					rejectionSample = reason
+					p.Log.Warn("otlp: metric rejected", "reason", reason, "metric_name", metric.Name())
+					continue
+				}
 
 				switch metric.Type() {
 				case pmetric.MetricTypeSum:
 					dps := metric.Sum().DataPoints()
 					for d := 0; d < dps.Len(); d++ {
 						dp := dps.At(d)
+						if metricDef.Monotonic && !validMonotonicValue(dp) {
+							rejected++
+							rejectionSample = "monotonic sum data point value must be finite and non-negative"
+							p.Log.Warn("otlp: metric data point rejected", "reason", rejectionSample, "metric_name", metric.Name())
+							continue
+						}
 						row, ok := p.processNumberDataPoint(resource, scope, metric, "sum", dp, def, now, &rejected, &rejectionSample)
 						if ok {
 							rows = append(rows, row)
@@ -93,11 +108,58 @@ func (p *Pipeline) ProcessMetrics(ctx context.Context, md pmetric.Metrics) (acce
 		if err := p.capErrorReasons(ctx, attrs); err != nil {
 			return 0, int64(md.DataPointCount()), "", err
 		}
+		if err := p.capCounters(ctx, rows); err != nil {
+			return 0, int64(md.DataPointCount()), "", err
+		}
 		if _, werr := p.Writer.InsertMetrics(ctx, rows); werr != nil {
 			return 0, int64(md.DataPointCount()), "", werr
 		}
 	}
 	return accepted, rejected, rejectionSample, nil
+}
+
+// checkMetricShape returns why metric as a whole doesn't match the shape its
+// allowlist entry declares, or "" if it does. Only a declared temporality is
+// checked: it is what makes summing a metric's data points meaningful.
+func checkMetricShape(def allowlist.MetricDef, metric pmetric.Metric) string {
+	if def.Temporality == "" {
+		return ""
+	}
+	if metric.Type() != pmetric.MetricTypeSum {
+		return fmt.Sprintf("metric %s must be a sum", def.Name)
+	}
+	want := pmetric.AggregationTemporalityDelta
+	if def.Temporality == allowlist.TemporalityCumulative {
+		want = pmetric.AggregationTemporalityCumulative
+	}
+	if got := metric.Sum().AggregationTemporality(); got != want {
+		return fmt.Sprintf("metric %s requires %s temporality, got %s", def.Name, def.Temporality, got)
+	}
+	return ""
+}
+
+// validMonotonicValue reports whether a monotonic sum's data point could
+// have come from a counter: finite and not negative.
+func validMonotonicValue(dp pmetric.NumberDataPoint) bool {
+	if dp.ValueType() == pmetric.NumberDataPointValueTypeInt {
+		return dp.IntValue() >= 0
+	}
+	v := dp.DoubleValue()
+	return v >= 0 && !math.IsInf(v, 1)
+}
+
+// metricDataPointCount counts a metric's data points whatever its type.
+func metricDataPointCount(m pmetric.Metric) int {
+	switch m.Type() {
+	case pmetric.MetricTypeSum:
+		return m.Sum().DataPoints().Len()
+	case pmetric.MetricTypeGauge:
+		return m.Gauge().DataPoints().Len()
+	case pmetric.MetricTypeHistogram:
+		return m.Histogram().DataPoints().Len()
+	default:
+		return metricPointCount(m)
+	}
 }
 
 func metricPointCount(m pmetric.Metric) int {

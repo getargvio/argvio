@@ -541,6 +541,84 @@ func TestMetricsAPI_EndToEnd_Live(t *testing.T) {
 			t.Errorf("group_by=message: status = %d, want 400", resp.StatusCode)
 		}
 	})
+
+	t.Run("counters list and series, tenant scoped", func(t *testing.T) {
+		at := now.Add(-2 * time.Hour)
+		var points []storage.MetricRow
+		add := func(id uuid.UUID, name, label string, v float64) {
+			attrs := storage.Attrs{"cli.counter.name": name}
+			if label != "" {
+				attrs["cli.counter.label"] = label
+			}
+			points = append(points, storage.MetricRow{
+				Time: at, TenantID: id, MetricName: "cli.counter", MetricType: "sum", Value: &v,
+				CommandName: strp("scan"), ConsentTier: "anonymous", DatapointAttributes: attrs,
+			})
+		}
+		add(tenantID, "schemes.seen", "bearer", 3)
+		add(tenantID, "schemes.seen", "apikey", 1)
+		add(tenantID, "crackers.found", "", 2)
+		add(otherTenantID, "schemes.seen", "bearer", 50)
+		add(otherTenantID, "leaked", "", 9)
+		if _, err := w.InsertMetrics(ctx, points); err != nil {
+			t.Fatalf("insert counters: %v", err)
+		}
+		for _, cagg := range []string{"cagg_counters_hourly", "cagg_counters_daily"} {
+			if _, err := pool.Exec(ctx, `CALL refresh_continuous_aggregate($1, NULL, NULL)`, cagg); err != nil {
+				t.Fatalf("refresh %s: %v", cagg, err)
+			}
+		}
+		query := "/v1/metrics/counters?from=" + url.QueryEscape(fromParam)
+
+		resp := get(t, query)
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("list: status = %d, want 200", resp.StatusCode)
+		}
+		var list struct {
+			Data storage.CounterList `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(list.Data.Counters) != 2 || list.Data.Counters[0].Name != "schemes.seen" || list.Data.Counters[0].Total != 4 || list.Data.Counters[1].Total != 2 {
+			t.Errorf("list = %+v, want this tenant's schemes.seen 4 then crackers.found 2", list.Data.Counters)
+		}
+
+		resp = get(t, query+"&name=schemes.seen&bucket=day")
+		defer resp.Body.Close()
+		var detail struct {
+			Data storage.CounterDetail `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		var total float64
+		for _, p := range detail.Data.Series {
+			total += p.Total
+		}
+		if total != 4 || len(detail.Data.Labels) != 2 || *detail.Data.Labels[0].Label != "bearer" {
+			t.Errorf("series = %+v, want 4 in total, bearer then apikey", detail.Data)
+		}
+
+		resp = get(t, query+"&name=leaked")
+		defer resp.Body.Close()
+		detail.Data = storage.CounterDetail{}
+		if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(detail.Data.Series) != 0 || len(detail.Data.Labels) != 0 {
+			t.Errorf("another tenant's counter leaked: %+v", detail.Data)
+		}
+
+		for _, bad := range []string{"&label=bearer", "&name=schemes.seen&bucket=minute"} {
+			resp = get(t, query+bad)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Errorf("%s: status = %d, want 400", bad, resp.StatusCode)
+			}
+		}
+	})
 }
 
 // TestMetricsAPI_OIDC_Live runs the whole path against a real Postgres: a

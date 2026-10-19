@@ -52,12 +52,24 @@ type AttrDef struct {
 
 // MetricDef describes one allowed metric name.
 type MetricDef struct {
-	Name              string   `yaml:"name"`
-	Type              string   `yaml:"type"` // sum | gauge | histogram
-	Unit              string   `yaml:"unit"`
-	Monotonic         bool     `yaml:"monotonic,omitempty"`
-	AllowedAttributes []string `yaml:"allowed_attributes"`
+	Name      string `yaml:"name"`
+	Type      string `yaml:"type"` // sum | gauge | histogram
+	Unit      string `yaml:"unit"`
+	Monotonic bool   `yaml:"monotonic,omitempty"`
+	// Temporality, if set (delta | cumulative), is the only aggregation
+	// temporality accepted for this metric, which must then be a sum.
+	Temporality string `yaml:"temporality,omitempty"`
+	// RequiredAttributes must survive attribute filtering for a data point
+	// to be kept; each must also be in AllowedAttributes.
+	RequiredAttributes []string `yaml:"required_attributes,omitempty"`
+	AllowedAttributes  []string `yaml:"allowed_attributes"`
 }
+
+// Aggregation temporalities a MetricDef may require.
+const (
+	TemporalityDelta      = "delta"
+	TemporalityCumulative = "cumulative"
+)
 
 // SpanDef describes one allowed span name pattern (glob-style "*" suffix
 // wildcard only — see MatchesSpanName).
@@ -198,6 +210,21 @@ func (s *Schema) finalize() error {
 	for _, m := range s.Metrics {
 		if err := s.checkAttrRefs(m.AllowedAttributes); err != nil {
 			return fmt.Errorf("allowlist: metric %q: %w", m.Name, err)
+		}
+		switch m.Temporality {
+		case "":
+		case TemporalityDelta, TemporalityCumulative:
+			if m.Type != "sum" {
+				return fmt.Errorf("allowlist: metric %q: temporality is only supported on type sum", m.Name)
+			}
+		default:
+			return fmt.Errorf("allowlist: metric %q: unknown temporality %q", m.Name, m.Temporality)
+		}
+		allowed := AllowedSet(m.AllowedAttributes)
+		for _, k := range m.RequiredAttributes {
+			if _, ok := allowed[k]; !ok {
+				return fmt.Errorf("allowlist: metric %q: required attribute %q is not in allowed_attributes", m.Name, k)
+			}
 		}
 		s.metricsByName[m.Name] = m
 	}

@@ -14,10 +14,11 @@ import (
 // vocabulary is full. It is always admitted and doesn't count toward the cap.
 const ErrorReasonOther = "other"
 
-// errorReasonTouchInterval is how stale error_reasons.last_seen may get
-// before ingest moves it forward; finer precision isn't needed to age
-// reasons out on a retention window measured in days.
-const errorReasonTouchInterval = 24 * time.Hour
+// vocabularyTouchInterval is how stale a capped vocabulary's last_seen
+// (error_reasons, counter_names, counter_labels) may get before ingest moves
+// it forward; finer precision isn't needed to age values out on a retention
+// window measured in days.
+const vocabularyTouchInterval = 24 * time.Hour
 
 // AdmitErrorReasons decides which of one tenant's error reasons may be stored
 // as-is. counts maps each distinct reason in a batch to the number of records
@@ -42,7 +43,7 @@ func (w *Writer) AdmitErrorReasons(ctx context.Context, tenantID uuid.UUID, coun
 		return admitted, 0, nil
 	}
 	sort.Strings(names)
-	staleBefore := at.Add(-errorReasonTouchInterval)
+	staleBefore := at.Add(-vocabularyTouchInterval)
 
 	known, stale, err := knownErrorReasons(ctx, w.pool, tenantID, names, staleBefore)
 	if err != nil {
@@ -79,7 +80,7 @@ func (w *Writer) AdmitErrorReasons(ctx context.Context, tenantID uuid.UUID, coun
 		return nil, 0, fmt.Errorf("storage: count error reasons: %w", err)
 	}
 
-	add, folded := planErrorReasons(names, known, counts, limit-size)
+	add, folded := planVocabulary(names, known, counts, limit-size)
 	for _, r := range names {
 		if known[r] {
 			admitted[r] = true
@@ -115,10 +116,10 @@ ON CONFLICT (tenant_id) DO UPDATE SET
 	return admitted, folded, nil
 }
 
-// planErrorReasons picks which reasons not yet in the vocabulary fit in room
-// free slots, most frequent first and then by name (names must be sorted),
-// and how many records carry the rest.
-func planErrorReasons(names []string, known map[string]bool, counts map[string]int64, room int) (add []string, folded int64) {
+// planVocabulary picks which values not yet in a capped vocabulary fit in
+// room free slots, most frequent first and then by name (names must be
+// sorted), and how many records carry the rest.
+func planVocabulary(names []string, known map[string]bool, counts map[string]int64, room int) (add []string, folded int64) {
 	var fresh []string
 	for _, r := range names {
 		if !known[r] {

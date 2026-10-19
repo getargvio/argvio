@@ -95,6 +95,8 @@ var descriptions = map[string]string{
 	"public.jwt_rate_limit_burst":               "Request-burst size for jwt/oidc-authenticated requests. 0 (default) means \"use rate_limit_burst instead\".",
 
 	"public.max_error_reasons_per_tenant": "Distinct cli.error.reason values kept per tenant. A new value past the cap is stored as \"other\" and counted in error_reason_overflow (see docs/allowlist.md).",
+	"public.max_counter_names_per_tenant": "Distinct cli.counter.name values kept per tenant. A new name past the cap is stored as \"other\" (its label dropped) and counted in counter_overflow (see docs/allowlist.md \"Vendor counters\").",
+	"public.max_counter_labels_per_name":  "Distinct cli.counter.label values kept per counter name, per tenant. A new label past the cap is stored as \"other\" and counted in counter_overflow.",
 
 	"public.allowlist_schema_path": "Path to the versioned allowlist/tier schema YAML (see docs/allowlist.md). The metrics server reads it too, for the consent tier ranking.",
 	"public.allowlist_hot_reload":  "Watch allowlist_schema_path and hot-reload on change without a restart.",

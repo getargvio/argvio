@@ -88,6 +88,9 @@ func ResolveTier(schema *allowlist.Schema, resourceAttrs, recordAttrs map[string
 type EventDef struct {
 	Found             bool
 	AllowedAttributes []string
+	// RequiredAttributes must each be kept after filtering, or the record is
+	// rejected (metrics only; see allowlist.MetricDef).
+	RequiredAttributes []string
 }
 
 // EvaluateEvent applies the full Layer-2 + tier pipeline to one event:
@@ -100,6 +103,8 @@ type EventDef struct {
 //     fails type/bounds validation, or requires a tier above the effective
 //     tier. A single malformed/over-scoped field degrades the record, it
 //     doesn't nuke otherwise-valid telemetry.
+//  4. Unless that drops one of def.RequiredAttributes: a record without
+//     them carries nothing usable, so it is rejected.
 func EvaluateEvent(
 	schema *allowlist.Schema,
 	def EventDef,
@@ -159,6 +164,12 @@ func EvaluateEvent(
 			continue
 		}
 		kept[k] = v
+	}
+
+	for _, k := range def.RequiredAttributes {
+		if _, ok := kept[k]; !ok {
+			return Decision{Accepted: false, RejectReason: fmt.Sprintf("required attribute %q missing or invalid", k)}
+		}
 	}
 
 	return Decision{

@@ -370,6 +370,14 @@ func sweepInstalls(ctx context.Context, pool *pgxpool.Pool, days int, tenantPred
 	if _, err := tx.Exec(ctx, `DELETE FROM error_reasons WHERE last_seen < $1 AND `+tenantPred, cutoff, tenantArg); err != nil {
 		return 0, fmt.Errorf("storage: sweep error reasons: %w", err)
 	}
+	// So do counter names and labels; a label goes with its name.
+	if _, err := tx.Exec(ctx, `DELETE FROM counter_names WHERE last_seen < $1 AND `+tenantPred, cutoff, tenantArg); err != nil {
+		return 0, fmt.Errorf("storage: sweep counter names: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM counter_labels WHERE (last_seen < $1 OR NOT EXISTS (SELECT 1 FROM counter_names n
+		WHERE n.tenant_id = counter_labels.tenant_id AND n.counter_name = counter_labels.counter_name)) AND `+tenantPred, cutoff, tenantArg); err != nil {
+		return 0, fmt.Errorf("storage: sweep counter labels: %w", err)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("storage: sweep installs: %w", err)
 	}
