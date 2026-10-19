@@ -86,6 +86,12 @@ func serveBucketed[T any](s *Server, name string, def storage.Bucket, allowed []
 	}
 }
 
+// errorFingerprints adapts QB.ErrorFingerprints to serveBucketed by
+// supplying the server's tier ranking for the read-time ceiling check.
+func (s *Server) errorFingerprints(ctx context.Context, scope storage.TenantScope, f storage.Filters, bucket storage.Bucket) ([]storage.ErrorFingerprint, error) {
+	return s.QB.ErrorFingerprints(ctx, scope, f, bucket, s.Tiers)
+}
+
 // handleFeatureDiscovery serves /v1/metrics/feature-discovery. It isn't
 // time-bucketed (discovery is measured as time since install, not on the
 // calendar), so it can't use serveBucketed; the optional `kind` param narrows

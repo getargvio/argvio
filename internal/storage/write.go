@@ -70,7 +70,7 @@ func (w *Writer) InsertTraces(ctx context.Context, rows []TraceRow) (int64, erro
 var logColumns = []string{
 	colTime, colTenantID, "trace_id", "span_id", "severity_number", "severity_text", "event_name", "body",
 	colCLIVersion, "os", colArch, colCommandName, colExitCode, colIsCI, colConsentTier,
-	"binary_size_bytes", "startup_ms",
+	"binary_size_bytes", "startup_ms", "error_fingerprint",
 	colScopeName, colScopeVersion, colResourceAttributes, "log_attributes",
 }
 
@@ -83,7 +83,7 @@ func (w *Writer) InsertLogs(ctx context.Context, rows []LogRow) (int64, error) {
 		return []any{
 			r.Time, r.TenantID, r.TraceID, r.SpanID, r.SeverityNumber, r.SeverityText, r.EventName, r.Body,
 			r.CLIVersion, r.OS, r.Arch, r.CommandName, r.ExitCode, r.IsCI, r.ConsentTier,
-			r.BinarySizeBytes, r.StartupMs,
+			r.BinarySizeBytes, r.StartupMs, r.ErrorFingerprint,
 			r.ScopeName, r.ScopeVersion, r.ResourceAttributes.json(), r.LogAttributes.json(),
 		}, nil
 	})

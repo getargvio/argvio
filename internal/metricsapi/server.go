@@ -28,6 +28,10 @@ type Server struct {
 	QB       *storage.QueryBuilder
 	Verifier *authn.Verifier
 
+	// Tiers ranks consent tiers as the allowlist schema does, for the
+	// read-time tier ceiling check on error detail.
+	Tiers storage.TierRanks
+
 	MaxResultPageSize     int
 	DefaultResultPageSize int
 	MaxTimeRangeSpan      time.Duration
@@ -42,7 +46,7 @@ type Server struct {
 }
 
 // NewServer wires the metrics query API.
-func NewServer(cfg config.MetricsConfig, authCfg config.AuthConfig, qb *storage.QueryBuilder, resolver tenant.Resolver, openAPISpecPath string, log *slog.Logger) *Server {
+func NewServer(cfg config.MetricsConfig, authCfg config.AuthConfig, qb *storage.QueryBuilder, resolver tenant.Resolver, tiers storage.TierRanks, openAPISpecPath string, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -51,6 +55,7 @@ func NewServer(cfg config.MetricsConfig, authCfg config.AuthConfig, qb *storage.
 	return &Server{
 		QB:                    qb,
 		Verifier:              verifier,
+		Tiers:                 tiers,
 		MaxResultPageSize:     cfg.MaxResultPageSize,
 		DefaultResultPageSize: cfg.DefaultResultPageSize,
 		MaxTimeRangeSpan:      cfg.MaxTimeRangeSpan,

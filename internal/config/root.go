@@ -78,7 +78,8 @@ func (r Root) ValidatePublic() error {
 }
 
 // ValidateMetrics fails fast with every problem found in the sections
-// `argvio serve metrics` needs: log_level, metrics.*, and storage.*.
+// `argvio serve metrics` needs: log_level, metrics.*, storage.*, and
+// public.allowlist_schema_path.
 func (r Root) ValidateMetrics() error {
 	var errs []string
 	if r.Metrics.ListenAddr == "" {
@@ -100,6 +101,10 @@ func (r Root) ValidateMetrics() error {
 	}
 	if r.Metrics.MaxTimeRangeSpan <= 0 {
 		errs = append(errs, "metrics.max_time_range_span must be > 0")
+	}
+	// The metrics server reads the same schema for its consent tier ranking.
+	if r.Public.AllowlistSchemaPath == "" {
+		errs = append(errs, "public.allowlist_schema_path must not be empty")
 	}
 	errs = append(errs, r.Storage.validate()...)
 	return joinErrors(errs)

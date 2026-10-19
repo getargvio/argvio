@@ -102,6 +102,9 @@ it stays small relative to the hypertables.
   short window.
 - `GET /v1/metrics/error-types`: distribution of `cli.error.type`,
   time-bucketed.
+- `GET /v1/metrics/error-fingerprints`: top failure causes, grouped by a
+  fingerprint of the normalized stack or message, ranked by affected
+  installs (full tier and above; docs/schema.md "Error fingerprints").
 - `GET /v1/metrics/version-transitions`: upgrades/downgrades by version
   pair.
 

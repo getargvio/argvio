@@ -93,6 +93,10 @@ type LogRow struct {
 	BinarySizeBytes *int64
 	StartupMs       *int64
 
+	// Failure-cause grouping key for cli.error.raised (internal/errfp);
+	// nil for other events and for errors with no message or stack.
+	ErrorFingerprint *string
+
 	ScopeName          *string
 	ScopeVersion       *string
 	ResourceAttributes Attrs

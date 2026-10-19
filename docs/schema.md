@@ -43,6 +43,9 @@ implausibly large values as `NULL`, so one faulty client can't skew percentiles.
 footprint, `migrations/0010`), carried on `cli.session.started` only; same
 `NULL` convention, with bounds in the same file (size above 0 and at most
 4 GiB; startup 0 to 1 hour, zero being a real sub-millisecond start).
+`logs` also carries `error_fingerprint` (`migrations/0011`), the failure-cause
+grouping key of a `cli.error.raised` event (see "Error fingerprints" below);
+`NULL` on every other event.
 Everything else lives in JSONB (`resource_attributes` + one of
 `span_attributes` / `log_attributes` / `datapoint_attributes`), with a GIN
 index on each for ad hoc attribute filtering (`internal/otlp/pipeline.go`'s
@@ -165,6 +168,53 @@ tenant's `retention_logs_days`, or `--default-logs-days` (default 90, matching
 that returns after that window is counted as new. The sweep deletes the
 install's `install_discoveries` rows with it, plus any whose install has no
 row once their own `first_at` passes the window.
+
+### Error fingerprints
+
+`GET /v1/metrics/error-fingerprints` groups `cli.error.raised` events into
+failure causes by `logs.error_fingerprint`, computed once at ingest by
+`internal/errfp` from the event's `cli.error.message` and
+`cli.error.stacktrace`:
+
+1. **Stack, when present.** The innermost 5 frames, innermost first (Python
+   tracebacks, which list it last, are reversed). Each frame is reduced to
+   its function and the base name of its file, so directories (home
+   directories, temp and build dirs, module caches), line and column numbers
+   and program-counter offsets drop out; both parts then go through the
+   message normalizer below, which removes build hashes such as
+   `chunk-3f2a9b1c.js`. Recognized layouts: Go tracebacks, Python
+   tracebacks, `at fn (file:line:col)` (JavaScript, Java, .NET, Rust) and
+   other `file.ext:line` locations (Ruby).
+2. **Otherwise, the message**, with, in order, quoted strings, UUIDs, URLs,
+   absolute paths (POSIX, `~/`, Windows drive and UNC), hex ids (`0x…`, or a
+   run of 8+ hex digits mixing digits and letters) and numbers (including
+   dotted/colon-separated ones and short units like `30s`) replaced by
+   placeholders, and whitespace collapsed.
+3. **Id**: the first 16 hex digits of SHA-256 over the algorithm version
+   (`errfp.Version`), the source (`stack` or `message`) and the normalized
+   lines. An event with neither a message nor a readable stack gets none.
+
+Ingest-time rather than query-time: the normalizer is a format-aware parser,
+cheap once per event in Go and expensive per query in SQL, and a stored key
+can be indexed (`idx_logs_tenant_error_fingerprint_time`). The trade-off is
+that the algorithm is fixed for stored rows: a change bumps `errfp.Version`
+and only regroups events ingested afterwards, and events stored before
+migration 0011 have no fingerprint and are not counted.
+
+Privacy handling:
+
+- Ingest fingerprints only what consent-tier stripping kept, so a fingerprint
+  never encodes a message or stack the record's tier didn't allow storing.
+  Both attributes are `full`, so only full-tier-or-above sessions contribute.
+- At read time an event only counts if its stored `consent_tier` ranks at or
+  below the tenant's **current** `tenant_config.tier_ceiling`, read in the
+  same statement (not from the API-key cache), so lowering a ceiling hides
+  detail stored under the old one immediately. The metrics server ranks
+  tiers from the allowlist schema (`public.allowlist_schema_path`); a tenant
+  with no config row or a ceiling the schema doesn't know sees nothing.
+- The response never carries raw text: the representative `message` and
+  `top_frame` are normalized from the fingerprint's most recent event and
+  truncated to 512 characters.
 
 ## Compression + retention policies (`migrations/0004`)
 

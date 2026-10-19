@@ -94,7 +94,7 @@ var descriptions = map[string]string{
 	"public.jwt_rate_limit_bytes_per_second":    "Byte-rate limit for jwt/oidc-authenticated requests. 0 (default) means \"use rate_limit_bytes_per_second instead\".",
 	"public.jwt_rate_limit_burst":               "Request-burst size for jwt/oidc-authenticated requests. 0 (default) means \"use rate_limit_burst instead\".",
 
-	"public.allowlist_schema_path": "Path to the versioned allowlist/tier schema YAML (see docs/allowlist.md).",
+	"public.allowlist_schema_path": "Path to the versioned allowlist/tier schema YAML (see docs/allowlist.md). The metrics server reads it too, for the consent tier ranking.",
 	"public.allowlist_hot_reload":  "Watch allowlist_schema_path and hot-reload on change without a restart.",
 
 	"public.shutdown_grace_period": "Graceful-shutdown timeout for the HTTP listener on SIGTERM/SIGINT (gRPC uses GracefulStop with no separate timeout).",
@@ -137,7 +137,7 @@ var descriptions = map[string]string{
 func main() {
 	rows := walk(reflect.TypeOf(config.Root{}), "", config.Defaults())
 	publicRows := filterRows(rows, "log_level", "auth.", "public.", "storage.")
-	metricsRows := filterRows(rows, "log_level", "auth.", "metrics.", "storage.")
+	metricsRows := filterRows(rows, "log_level", "auth.", "metrics.", "storage.", "public.allowlist_schema_path")
 
 	fmt.Println("# Configuration reference")
 	fmt.Println()

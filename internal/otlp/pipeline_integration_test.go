@@ -18,6 +18,7 @@ import (
 
 	"github.com/getargvio/argvio/internal/allowlist"
 	"github.com/getargvio/argvio/internal/consent"
+	"github.com/getargvio/argvio/internal/errfp"
 	"github.com/getargvio/argvio/internal/storage"
 	"github.com/getargvio/argvio/internal/tenant"
 )
@@ -430,6 +431,56 @@ func TestProcessLogs_SessionFootprint_Live(t *testing.T) {
 	// Binary size is optional: a runtime with no single binary still reports startup.
 	if r := read("startuponly"); r.size != nil || !eq(r.startup, 7) {
 		t.Errorf("startuponly: want size NULL and startup 7, got size=%v startup=%v", r.size, r.startup)
+	}
+}
+
+func TestProcessLogs_ErrorFingerprint_Live(t *testing.T) {
+	pipeline, pool, tenantID := setupPipeline(t, "full", consent.ModeStrip)
+	ctx := context.Background()
+	now := time.Now()
+
+	msg := "open /home/alice/.toolrc: permission denied"
+	ld := plog.NewLogs()
+	addError := func(tier, label, stack string) {
+		rl := ld.ResourceLogs().AppendEmpty()
+		rl.Resource().Attributes().PutStr("cli.analytics.tier", tier)
+		rec := rl.ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+		rec.SetEventName(errfp.EventName)
+		rec.SetTimestamp(pcommon.NewTimestampFromTime(now))
+		rec.Attributes().PutStr("cli.version", label)
+		rec.Attributes().PutStr(errfp.AttrMessage, msg)
+		if stack != "" {
+			rec.Attributes().PutStr(errfp.AttrStacktrace, stack)
+		}
+	}
+	stack := "main.load()\n\t/home/alice/src/tool/load.go:12 +0x1d"
+	addError("full", "message", "")
+	addError("full", "stack", stack)
+	// Message and stack are full-tier: a basic record loses both, so there
+	// is nothing to fingerprint.
+	addError("basic", "stripped", stack)
+
+	if accepted, rejected, sample, err := pipeline.ProcessLogs(ctx, ld); err != nil || accepted != 3 || rejected != 0 {
+		t.Fatalf("ProcessLogs: accepted=%d rejected=%d sample=%q err=%v, want 3/0", accepted, rejected, sample, err)
+	}
+	read := func(label string) *string {
+		t.Helper()
+		var fp *string
+		if err := pool.QueryRow(ctx, `SELECT error_fingerprint FROM logs WHERE tenant_id=$1 AND cli_version=$2`, tenantID, label).Scan(&fp); err != nil {
+			t.Fatalf("read %s: %v", label, err)
+		}
+		return fp
+	}
+	byMessage, _ := errfp.Compute(msg, "")
+	byStack, _ := errfp.Compute(msg, stack)
+	if fp := read("message"); fp == nil || *fp != byMessage.Fingerprint {
+		t.Errorf("message-only error: fingerprint %v, want %s", fp, byMessage.Fingerprint)
+	}
+	if fp := read("stack"); fp == nil || *fp != byStack.Fingerprint {
+		t.Errorf("error with stack: fingerprint %v, want %s", fp, byStack.Fingerprint)
+	}
+	if fp := read("stripped"); fp != nil {
+		t.Errorf("basic-tier error: fingerprint %q, want NULL", *fp)
 	}
 }
 

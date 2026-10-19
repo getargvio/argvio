@@ -20,12 +20,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/getargvio/argvio/internal/config"
+	"github.com/getargvio/argvio/internal/errfp"
 	"github.com/getargvio/argvio/internal/oidc/oidctest"
 	"github.com/getargvio/argvio/internal/storage"
 	"github.com/getargvio/argvio/internal/tenant"
 )
 
 func strp(s string) *string { return &s }
+
+// testTiers is the ranking schema/allowlist/v1.yaml defines.
+var testTiers = storage.TierRanks{"anonymous": 0, "basic": 1, "full": 2, "optin_plus": 3}
 
 func signTestJWT(t *testing.T, secret string, tenantID uuid.UUID) string {
 	t.Helper()
@@ -141,7 +145,7 @@ func TestMetricsAPI_EndToEnd_Live(t *testing.T) {
 	}, config.AuthConfig{
 		Methods:       []config.AuthMethod{config.AuthMethodJWT},
 		JWTSigningKey: secret,
-	}, storage.NewQueryBuilder(pool), resolver, "", slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
+	}, storage.NewQueryBuilder(pool), resolver, testTiers, "", slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -419,6 +423,64 @@ func TestMetricsAPI_EndToEnd_Live(t *testing.T) {
 			t.Errorf("status = %d, want 400 for oversized time range", resp.StatusCode)
 		}
 	})
+
+	t.Run("error fingerprints are tenant scoped and honor the current tier ceiling", func(t *testing.T) {
+		setCeiling := func(id uuid.UUID, tier string) {
+			t.Helper()
+			if _, err := pool.Exec(ctx, `UPDATE tenant_config SET tier_ceiling = $2 WHERE tenant_id = $1`, id, tier); err != nil {
+				t.Fatalf("set ceiling: %v", err)
+			}
+		}
+		setCeiling(tenantID, "full")
+		setCeiling(otherTenantID, "full")
+		defer setCeiling(tenantID, "basic")
+		defer setCeiling(otherTenantID, "basic")
+
+		msg := "open /home/alice/.toolrc: permission denied"
+		fp, _ := errfp.Compute(msg, "")
+		var errs []storage.LogRow
+		for i, id := range []uuid.UUID{tenantID, tenantID, otherTenantID} {
+			errs = append(errs, storage.LogRow{
+				Time: now.Add(-time.Duration(i) * time.Minute), TenantID: id, EventName: errfp.EventName,
+				CommandName: strp("deploy"), CLIVersion: strp("1.10.0"), ConsentTier: "full", ErrorFingerprint: &fp.Fingerprint,
+				LogAttributes: storage.Attrs{"cli.install_id": fmt.Sprintf("inst-%d", i), errfp.AttrMessage: msg},
+			})
+		}
+		if _, err := w.InsertLogs(ctx, errs); err != nil {
+			t.Fatalf("insert error logs: %v", err)
+		}
+
+		fetch := func(t *testing.T) []storage.ErrorFingerprint {
+			t.Helper()
+			resp := get(t, "/v1/metrics/error-fingerprints?from="+url.QueryEscape(fromParam))
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want 200", resp.StatusCode)
+			}
+			var body struct {
+				Data []storage.ErrorFingerprint `json:"data"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			return body.Data
+		}
+
+		got := fetch(t)
+		if len(got) != 1 || got[0].Fingerprint != fp.Fingerprint || got[0].EventCount != 2 || got[0].AffectedInstalls != 2 {
+			t.Fatalf("got %+v, want this tenant's 2 events under %s", got, fp.Fingerprint)
+		}
+		if got[0].Message == nil || *got[0].Message != "open <path>: permission denied" {
+			t.Errorf("message = %v, want the normalized sample", got[0].Message)
+		}
+
+		// Lowering the ceiling takes effect at once: it's read per query, not
+		// from the API-key cache.
+		setCeiling(tenantID, "basic")
+		if got := fetch(t); len(got) != 0 {
+			t.Errorf("after lowering the ceiling to basic: got %+v, want none", got)
+		}
+	})
 }
 
 // TestMetricsAPI_OIDC_Live runs the whole path against a real Postgres: a
@@ -492,7 +554,7 @@ func TestMetricsAPI_OIDC_Live(t *testing.T) {
 				CacheTTL: time.Minute, NegativeCacheTTL: time.Second,
 			},
 		},
-	}, storage.NewQueryBuilder(pool), tenant.NewCache(store, time.Minute), "",
+	}, storage.NewQueryBuilder(pool), tenant.NewCache(store, time.Minute), testTiers, "",
 		slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()

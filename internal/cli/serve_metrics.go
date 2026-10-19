@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
 
+	"github.com/getargvio/argvio/internal/allowlist"
 	"github.com/getargvio/argvio/internal/config"
 	"github.com/getargvio/argvio/internal/metricsapi"
 	"github.com/getargvio/argvio/internal/storage"
@@ -72,7 +73,18 @@ func runMetrics(cfg *config.Root, openAPIPath string, log *slog.Logger) error {
 	const apiKeyCacheTTL = 60 * time.Second
 	resolver := tenant.NewCache(tenant.NewStore(pool), apiKeyCacheTTL)
 
-	srv := metricsapi.NewServer(cfg.Metrics, cfg.Auth, storage.NewQueryBuilder(pool), resolver, openAPIPath, log)
+	// Only the tier ranking is needed, so the schema is read once and never
+	// watched: tiers don't change without a deploy.
+	schemaLoader, err := allowlist.Load(cfg.Public.AllowlistSchemaPath, log)
+	if err != nil {
+		return fmt.Errorf("loading allowlist schema: %w", err)
+	}
+	tiers := storage.TierRanks{}
+	for _, t := range schemaLoader.Current().ConsentTiers {
+		tiers[t.Name] = t.Rank
+	}
+
+	srv := metricsapi.NewServer(cfg.Metrics, cfg.Auth, storage.NewQueryBuilder(pool), resolver, tiers, openAPIPath, log)
 	if err := srv.Verifier.CheckStartup(ctx); err != nil {
 		return fmt.Errorf("auth config: %w", err)
 	}
