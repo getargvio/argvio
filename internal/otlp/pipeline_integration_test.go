@@ -32,6 +32,8 @@ func testBounds() Bounds {
 		MaxTimestampSkewPast:          24 * time.Hour,
 		MaxTimestampSkewFuture:        5 * time.Minute,
 		MaxErrorReasonsPerTenant:      100,
+		MaxCounterNamesPerTenant:      200,
+		MaxCounterLabelsPerName:       50,
 	}
 }
 
@@ -590,6 +592,103 @@ func TestProcessMetrics_ErrorReason_Live(t *testing.T) {
 	// Cap of 1: the first reason by name is admitted, the other folds.
 	if len(got) != 3 || got["invalid-url"] != 1 || got["other"] != 1 || got["<none>"] != 1 {
 		t.Errorf("stored reasons = %v, want invalid-url, other and one without", got)
+	}
+}
+
+func TestProcessMetrics_Counter_Live(t *testing.T) {
+	pipeline, pool, tenantID := setupPipeline(t, "basic", consent.ModeStrip)
+	pipeline.Bounds.MaxCounterNamesPerTenant = 2
+	pipeline.Bounds.MaxCounterLabelsPerName = 1
+	ctx := context.Background()
+	now := time.Now()
+
+	md := pmetric.NewMetrics()
+	rm := md.ResourceMetrics().AppendEmpty()
+	// Anonymous: counters are reported without any install id.
+	rm.Resource().Attributes().PutStr("cli.analytics.tier", "anonymous")
+	metrics := rm.ScopeMetrics().AppendEmpty().Metrics()
+	newCounter := func(temporality pmetric.AggregationTemporality) pmetric.Metric {
+		m := metrics.AppendEmpty()
+		m.SetName("cli.counter")
+		m.SetUnit("1")
+		m.SetEmptySum().SetIsMonotonic(true)
+		m.Sum().SetAggregationTemporality(temporality)
+		return m
+	}
+	// Each point is labelled by its cli.version so it can be found again.
+	add := func(m pmetric.Metric, version, name, label string, v int64) {
+		dp := m.Sum().DataPoints().AppendEmpty()
+		dp.SetTimestamp(pcommon.NewTimestampFromTime(now))
+		dp.SetIntValue(v)
+		dp.Attributes().PutStr("cli.version", version)
+		if name != "" {
+			dp.Attributes().PutStr("cli.counter.name", name)
+		}
+		if label != "" {
+			dp.Attributes().PutStr("cli.counter.label", label)
+		}
+	}
+	delta := newCounter(pmetric.AggregationTemporalityDelta)
+	add(delta, "kept", "rules.generated", "get", 3)
+	add(delta, "kept-again", "rules.generated", "get", 2)
+	// Cap of one label per name: "get" is more frequent, "post" folds.
+	add(delta, "label-folded", "rules.generated", "post", 1)
+	add(delta, "no-label", "schemes.seen", "", 4)
+	// Cap of two names, both taken above: a third folds, label and all.
+	add(delta, "name-folded", "tools.found", "nmap", 1)
+	add(delta, "bad-label", "schemes.seen", "Bearer Token", 1)
+	add(delta, "no-name", "", "get", 1)
+	add(delta, "bad-name", "/home/alice", "", 1)
+	add(delta, "negative", "rules.generated", "get", -1)
+	// Cumulative counters would be double counted when summed: the whole
+	// metric is rejected.
+	add(newCounter(pmetric.AggregationTemporalityCumulative), "cumulative", "rules.generated", "get", 9)
+
+	accepted, rejected, sample, err := pipeline.ProcessMetrics(ctx, md)
+	if err != nil || accepted != 6 || rejected != 4 {
+		t.Fatalf("ProcessMetrics: accepted=%d rejected=%d sample=%q err=%v, want 6/4", accepted, rejected, sample, err)
+	}
+
+	type stored struct {
+		name, label, tier string
+		value             float64
+	}
+	rows, err := pool.Query(ctx, `
+SELECT cli_version, datapoint_attributes ->> 'cli.counter.name', coalesce(datapoint_attributes ->> 'cli.counter.label', ''), consent_tier, value
+FROM metrics WHERE tenant_id = $1 AND metric_name = 'cli.counter'`, tenantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]stored{}
+	for rows.Next() {
+		var version string
+		var s stored
+		if err := rows.Scan(&version, &s.name, &s.label, &s.tier, &s.value); err != nil {
+			t.Fatal(err)
+		}
+		got[version] = s
+	}
+	rows.Close()
+	want := map[string]stored{
+		"kept":         {"rules.generated", "get", "anonymous", 3},
+		"kept-again":   {"rules.generated", "get", "anonymous", 2},
+		"label-folded": {"rules.generated", "other", "anonymous", 1},
+		"no-label":     {"schemes.seen", "", "anonymous", 4},
+		"name-folded":  {"other", "", "anonymous", 1},
+		"bad-label":    {"schemes.seen", "", "anonymous", 1},
+	}
+	if len(got) != len(want) {
+		t.Errorf("stored %d counter points, want %d: %+v", len(got), len(want), got)
+	}
+	for version, w := range want {
+		if got[version] != w {
+			t.Errorf("%s: stored %+v, want %+v", version, got[version], w)
+		}
+	}
+
+	var foldedNames, foldedLabels int64
+	if err := pool.QueryRow(ctx, `SELECT folded_names, folded_labels FROM counter_overflow WHERE tenant_id = $1`, tenantID).Scan(&foldedNames, &foldedLabels); err != nil || foldedNames != 1 || foldedLabels != 1 {
+		t.Errorf("overflow = names %d labels %d (err %v), want 1 and 1", foldedNames, foldedLabels, err)
 	}
 }
 

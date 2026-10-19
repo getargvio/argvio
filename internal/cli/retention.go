@@ -29,9 +29,10 @@ func newRetentionSweepCommand() *cobra.Command {
 		Long: `Sweep rows past their per-tenant retention override.
 
 Also purges install state (the installs table, with its version changes and
-feature/flag discoveries) and unused error reasons by last_seen: tenants with a
-logs retention override use it, every other tenant uses --default-logs-days,
-which should match storage.logs.retention_after.`,
+feature/flag discoveries), unused error reasons and unused counter names
+and labels by last_seen: tenants with a logs retention override use it,
+every other tenant uses --default-logs-days, which should match
+storage.logs.retention_after.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resolved, err := resolveDSN(dsn)
 			if err != nil {

@@ -231,3 +231,37 @@ func TestEvaluateEvent_ErrorReasonPattern(t *testing.T) {
 		t.Error("anonymous tier should strip cli.error.reason")
 	}
 }
+
+// A counter data point is kept at the anonymous tier, and rejected outright
+// when its name is missing or fails the pattern: it would count nothing.
+func TestEvaluateEvent_CounterRequiresName(t *testing.T) {
+	s := loadSchema(t)
+	m, _ := s.MetricByName("cli.counter")
+	def := EventDef{Found: true, AllowedAttributes: m.AllowedAttributes, RequiredAttributes: m.RequiredAttributes}
+
+	dec := EvaluateEvent(s, def, "anonymous", "basic", ModeStrip, map[string]any{
+		"cli.counter.name": "rules.generated", "cli.counter.label": "get", "cli.install_id": "abc",
+	})
+	if !dec.Accepted || dec.KeptAttributes["cli.counter.name"] != "rules.generated" || dec.KeptAttributes["cli.counter.label"] != "get" {
+		t.Fatalf("anonymous counter: %+v, want accepted with name and label", dec)
+	}
+	if _, kept := dec.KeptAttributes["cli.install_id"]; kept {
+		t.Error("cli.counter must not keep an install id")
+	}
+
+	// A bad label only loses the label.
+	dec = EvaluateEvent(s, def, "anonymous", "basic", ModeStrip, map[string]any{"cli.counter.name": "rules.generated", "cli.counter.label": "/home/alice"})
+	if _, kept := dec.KeptAttributes["cli.counter.label"]; !dec.Accepted || kept {
+		t.Errorf("bad label: %+v, want accepted without the label", dec)
+	}
+
+	for _, attrs := range []map[string]any{
+		{"cli.counter.label": "get"},
+		{"cli.counter.name": "Rules Generated"},
+		{"cli.counter.name": 3},
+	} {
+		if dec := EvaluateEvent(s, def, "anonymous", "basic", ModeStrip, attrs); dec.Accepted {
+			t.Errorf("%v: accepted, want rejected for a missing or invalid name", attrs)
+		}
+	}
+}

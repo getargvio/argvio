@@ -23,14 +23,14 @@ func TestPlanErrorReasons(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			add, folded := planErrorReasons(names, known, counts, c.room)
+			add, folded := planVocabulary(names, known, counts, c.room)
 			if !slices.Equal(add, c.wantAdd) || folded != c.wantFolded {
 				t.Errorf("got add=%v folded=%d, want add=%v folded=%d", add, folded, c.wantAdd, c.wantFolded)
 			}
 		})
 	}
 
-	if add, folded := planErrorReasons([]string{"known"}, known, counts, 0); add != nil || folded != 0 {
+	if add, folded := planVocabulary([]string{"known"}, known, counts, 0); add != nil || folded != 0 {
 		t.Errorf("known reasons never fold: add=%v folded=%d", add, folded)
 	}
 }

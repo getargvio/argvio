@@ -141,6 +141,59 @@ func (s *Server) handleFeatureDiscovery(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{responseDataKey: points})
 }
 
+// handleCounters serves /v1/metrics/counters: the tenant's vendor counters
+// with their totals, or, with name=, one counter's time series (bucketed like
+// the other endpoints, optionally narrowed by label=) and its labels. Two
+// response shapes, so it can't use serveBucketed.
+func (s *Server) handleCounters(w http.ResponseWriter, r *http.Request) {
+	scope, ok := scopeFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "missing tenant scope")
+		return
+	}
+	f, err := s.parseFilters(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	q := r.URL.Query()
+	name := q.Get("name")
+	var label *string
+	if q.Has("label") {
+		if name == "" {
+			writeError(w, http.StatusBadRequest, "invalid_request", "label requires name")
+			return
+		}
+		l := q.Get("label")
+		label = &l
+	}
+	ctx, cancel := s.withQuery(r.Context())
+	defer cancel()
+
+	if name == "" {
+		list, err := s.QB.Counters(ctx, scope, f)
+		if err != nil {
+			s.Log.Error("metricsapi: counters failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{responseDataKey: list})
+		return
+	}
+	bucket, err := parseBucket(r, storage.BucketHour, anyBucket...)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	detail, err := s.QB.CounterSeries(ctx, scope, f, name, label, bucket)
+	if err != nil {
+		s.Log.Error("metricsapi: counter series failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{responseDataKey: detail})
+}
+
 // handleVersionFootprint serves /v1/metrics/version-footprint. It isn't
 // time-bucketed (one row per CLI version over the whole window, ordered by
 // version rather than by time), so it can't use serveBucketed.

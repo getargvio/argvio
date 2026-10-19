@@ -48,6 +48,11 @@ metrics:
     type: sum
     unit: "1"
     allowed_attributes: [cli.command.name, cli.command.exit_code, ...]
+  - name: cli.counter
+    type: sum
+    temporality: delta                 # optional, sum only: reject other temporalities
+    required_attributes: [cli.counter.name]  # optional: reject points that lose these
+    allowed_attributes: [cli.counter.name, cli.counter.label, ...]
 
 spans:
   - name_pattern: "cli.command.*"     # trailing "*" wildcard only
@@ -87,6 +92,11 @@ For each span / log record / metric data point:
    (`internal/allowlist.CheckAttribute`), or has a `min_tier` above the
    effective tier. A single malformed or over-scoped field degrades the
    record; it doesn't nuke an otherwise-valid one.
+5. **Required attributes.** A metric data point that no longer carries one
+   of its metric's `required_attributes` after step 4 is rejected: it would
+   mean nothing. Before any of this, a metric with a declared `temporality`
+   is rejected whole if it was sent with another one, and a `monotonic`
+   sum's data point is rejected if its value is negative or not finite.
 
 Every drop/reject is logged with the reason and the attribute *key* —
 never the value, since the value may be exactly the sensitive thing being
@@ -96,7 +106,7 @@ dropped.
 
 | Tier | Adds |
 |---|---|
-| `anonymous` | Aggregate-only shape: `cli.command.name`, `cli.command.exit_code`, `cli.command.duration_ms`, `cli.version`, `cli.os`, `cli.arch`, `cli.is_ci`. |
+| `anonymous` | Aggregate-only shape: `cli.command.name`, `cli.command.exit_code`, `cli.command.duration_ms`, `cli.version`, `cli.os`, `cli.arch`, `cli.is_ci`, and vendor counters (`cli.counter.name`, `cli.counter.label`; **see the warning under "Vendor counters"**). |
 | `basic` | Opaque `cli.session_id`/`cli.install_id` (random UUIDs, not identity-linked), `cli.flag.names` (names only, not values), shell/terminal metadata, the coarse `cli.error.type` category and the vendor's finer `cli.error.reason` (see below), and process resource usage on the command span (`cli.process.peak_rss_bytes`, `cli.process.cpu_time_ms`), and build footprint on `cli.session.started` (`cli.binary.size_bytes`, `cli.startup.duration_ms`). |
 | `full` | Error diagnostics (`cli.error.message`/`stacktrace`), the full allowlisted attribute set for allowed events. |
 | `optin_plus` | Fields marked `sensitive: true` explicitly: `cli.args.raw`, `cli.env.vars`, `cli.host.name`, `cli.user.name`, `cli.path.raw`. Only accepted if **both** the tenant's ceiling is `optin_plus` and the record itself declares it. |
@@ -138,8 +148,62 @@ the attribute (older SDKs) are unaffected.
 `GET /v1/metrics/error-types?group_by=reason` breaks each category down by
 reason, per command; without `group_by` the response is unchanged. Like the
 category, it is read from `cli.error.raised` events, so it only counts what
-the SDK sent as events. No continuous aggregate reads the `metrics` table,
-so carrying the reason on `cli.errors` needed no rollup change or backfill.
+the SDK sent as events. No continuous aggregate reads `cli.errors` from the
+`metrics` table, so carrying the reason on it needed no rollup change or
+backfill.
+
+## Vendor counters (`cli.counter`)
+
+> **Warning: counters are accepted at the `anonymous` tier.** They are
+> reported from CI and from users who allow no install identifier, under the
+> lowest consent level there is. `cli.counter.name` and `cli.counter.label`
+> must be **fixed identifiers chosen in the CLI's code**: never user input,
+> file paths, host names, URLs, tokens, or anything derived from them. The SDK
+> does not scrub them.
+
+`cli.counter` is one generic counter for things specific to a vendor's
+product ("OpenAPI security schemes seen, by type", "rules generated, by HTTP
+verb"), so a new one needs no server change. It is a `sum`, `monotonic`,
+unit `1`, and must be sent with **delta** temporality: each data point adds
+its value to the counter named by `cli.counter.name`, optionally broken down
+by `cli.counter.label`. It may also carry `cli.command.name`, `cli.version`,
+`cli.os`, `cli.arch` and `cli.is_ci`, and nothing that identifies an install
+or a session.
+
+What the server enforces:
+
+1. **Shape.** A `cli.counter` metric sent with cumulative temporality is
+   rejected whole (summing cumulative points would double count), and a data
+   point with a negative or non-finite value is rejected.
+2. **Format.** Name and label have the same `pattern` and `max_length: 64`
+   as `cli.error.reason`: `^[a-z0-9][a-z0-9._-]*$`. A label that fails it is
+   dropped (the point is kept, unlabelled); a name that fails it, or is
+   missing, rejects the point, since `cli.counter.name` is a
+   `required_attributes` entry.
+3. **Cardinality**, per tenant, in the `counter_names` and `counter_labels`
+   tables: at most `public.max_counter_names_per_tenant` distinct names
+   (default 200) and `public.max_counter_labels_per_name` distinct labels per
+   name (default 50). A value already in the vocabulary is stored as-is; a new
+   one is admitted while there is room (within a batch, most frequent first,
+   then by name). Past the name cap the point is stored under the name
+   `other` without a label; past a label cap it keeps its name and its label
+   becomes `other`. A name sent as `other` literally also loses its label.
+   Folded points are counted per tenant in `counter_overflow`
+   (`folded_names`, `folded_labels`, `last_folded_at`), logged as a warning,
+   and reported by the API. Values not seen for the tenant's logs retention
+   window are dropped by `argvio retention sweep`, freeing their slots.
+
+The caps are server config rather than schema: they bound storage per tenant,
+like `public.max_error_reasons_per_tenant`, and changing them needs no
+schema reload. They are applied in the ingest pipeline after allowlist
+filtering and before the rows are written (`internal/otlp/counters.go`).
+
+`GET /v1/metrics/counters` lists the counter names with their totals over a
+window and the fold counts; with `name=` it returns that counter's time
+series (hour/day/week/month) and its top labels. Both read the
+`cagg_counters_hourly` / `cagg_counters_daily` rollups (docs/schema.md). No
+per-install distinct count is offered: the points carry no install id, by
+design.
 
 ## Worked example: adding a new supported log event
 

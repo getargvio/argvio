@@ -287,3 +287,81 @@ attributes:
 		t.Errorf("valid pattern: %v", err)
 	}
 }
+
+// Vendor counters are anonymous tier, so they are reported even without an
+// install id; the pattern and length are what keep free text out.
+func TestCounterMetric(t *testing.T) {
+	s := loadRealSchema(t)
+	m, ok := s.MetricByName("cli.counter")
+	if !ok {
+		t.Fatal("cli.counter not defined")
+	}
+	if m.Type != "sum" || !m.Monotonic || m.Unit != "1" || m.Temporality != TemporalityDelta {
+		t.Errorf("cli.counter = %+v, want a monotonic delta sum with unit 1", m)
+	}
+	if !slices.Equal(m.RequiredAttributes, []string{"cli.counter.name"}) {
+		t.Errorf("required attributes = %v, want cli.counter.name", m.RequiredAttributes)
+	}
+	for _, k := range []string{"cli.counter.name", "cli.counter.label", "cli.command.name", "cli.version", "cli.os", "cli.arch", "cli.is_ci"} {
+		if !slices.Contains(m.AllowedAttributes, k) {
+			t.Errorf("cli.counter should allow %s", k)
+		}
+	}
+	if slices.Contains(m.AllowedAttributes, "cli.install_id") || slices.Contains(m.AllowedAttributes, "cli.session_id") {
+		t.Error("cli.counter must not carry install or session ids")
+	}
+
+	anonymous, _ := s.TierRank("anonymous")
+	valid := []string{"openapi.security-schemes", "rules_generated", "get", "0", strings.Repeat("a", 64)}
+	invalid := []string{"", "Bearer", "two words", "-x", ".x", "/etc/passwd", "https://example.com", "a=b", "naïve", "x\n", strings.Repeat("a", 65)}
+	for _, key := range []string{"cli.counter.name", "cli.counter.label"} {
+		def, ok := s.AttrDefFor(key)
+		if !ok {
+			t.Fatalf("%s not defined", key)
+		}
+		if rank, _ := s.TierRank(def.MinTier); rank != anonymous || def.Type != AttrString || def.MaxLength != 64 || def.Sensitive {
+			t.Errorf("%s = %+v, want anonymous-tier, non-sensitive string of at most 64", key, def)
+		}
+		for _, v := range valid {
+			if err := CheckAttribute(def, v); err != nil {
+				t.Errorf("%s: CheckAttribute(%q) = %v, want nil", key, v, err)
+			}
+		}
+		for _, v := range invalid {
+			if err := CheckAttribute(def, v); err == nil {
+				t.Errorf("%s: CheckAttribute(%q) = nil, want an error", key, v)
+			}
+		}
+	}
+}
+
+func TestMetricShapeValidatedAtLoad(t *testing.T) {
+	base := `
+schema_version: 1
+consent_tiers: [{name: basic, rank: 0}]
+attributes:
+  a: {type: string, min_tier: basic}
+  b: {type: string, min_tier: basic}
+metrics:
+  - name: m
+    type: %s
+    temporality: %s
+    required_attributes: [%s]
+    allowed_attributes: [a]
+`
+	for _, c := range []struct {
+		typ, temporality, required, wantErr string
+	}{
+		{"gauge", "delta", "a", "temporality is only supported on type sum"},
+		{"sum", "sometimes", "a", "unknown temporality"},
+		{"sum", "delta", "b", `required attribute "b" is not in allowed_attributes`},
+	} {
+		_, err := Parse([]byte(fmt.Sprintf(base, c.typ, c.temporality, c.required)))
+		if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+			t.Errorf("%+v: err = %v, want %q", c, err, c.wantErr)
+		}
+	}
+	if _, err := Parse([]byte(fmt.Sprintf(base, "sum", "cumulative", "a"))); err != nil {
+		t.Errorf("valid metric: %v", err)
+	}
+}

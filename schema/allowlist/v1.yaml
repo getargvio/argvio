@@ -44,7 +44,9 @@ consent_tiers:
     rank: 0
     description: >
       No identifiers beyond what the API key itself implies. Aggregate-only
-      shape: command name, exit code, duration, environment class.
+      shape: command name, exit code, duration, environment class, and
+      vendor counters (cli.counter), whose names and labels must be fixed
+      identifiers from the CLI's code, never user input.
   - name: basic
     rank: 1
     description: >
@@ -258,6 +260,35 @@ attributes:
     min_tier: basic
     sensitive: false
 
+  # Vendor-defined counters (cli.counter). WARNING: anonymous tier, so these
+  # are reported from CI and with no install identifier. Name and label must
+  # be fixed identifiers chosen in the CLI's code, never user input, file
+  # paths, host names, URLs, tokens or anything derived from them. The SDK
+  # does not scrub them (docs/allowlist.md "Vendor counters").
+  cli.counter.name:
+    type: string
+    max_length: 64
+    pattern: "^[a-z0-9][a-z0-9._-]*$"
+    min_tier: anonymous
+    sensitive: false
+    description: >
+      Which vendor counter a cli.counter data point increments, e.g.
+      "openapi.security-schemes". A fixed identifier from the CLI's code,
+      never user input. Past public.max_counter_names_per_tenant distinct
+      names per tenant, new ones are stored as "other".
+
+  cli.counter.label:
+    type: string
+    max_length: 64
+    pattern: "^[a-z0-9][a-z0-9._-]*$"
+    min_tier: anonymous
+    sensitive: false
+    description: >
+      Optional breakdown of a cli.counter, e.g. "bearer" for the security
+      scheme type. Same rules as cli.counter.name; past
+      public.max_counter_labels_per_name distinct labels per counter, new
+      ones are stored as "other".
+
   cli.args.raw:
     type: string
     max_length: 4096
@@ -332,6 +363,25 @@ metrics:
       - cli.version
       - cli.os
       - cli.arch
+
+  # One generic counter for vendor-specific counts, so a new one needs no
+  # server change. Data points are summed, hence delta temporality only, and
+  # a point without a valid cli.counter.name is rejected.
+  - name: cli.counter
+    type: sum
+    unit: "1"
+    monotonic: true
+    temporality: delta
+    required_attributes:
+      - cli.counter.name
+    allowed_attributes:
+      - cli.counter.name
+      - cli.counter.label
+      - cli.command.name
+      - cli.version
+      - cli.os
+      - cli.arch
+      - cli.is_ci
 
   - name: cli.sessions.active
     type: gauge

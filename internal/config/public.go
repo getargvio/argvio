@@ -22,6 +22,11 @@ type PublicConfig struct {
 	// Distinct cli.error.reason values kept per tenant; past it, new ones
 	// are stored as "other" (internal/otlp/reasons.go).
 	MaxErrorReasonsPerTenant int `koanf:"max_error_reasons_per_tenant"`
+	// Distinct cli.counter.name values kept per tenant, and distinct
+	// cli.counter.label values kept per name; past them, new ones are stored
+	// as "other" (internal/otlp/counters.go).
+	MaxCounterNamesPerTenant int `koanf:"max_counter_names_per_tenant"`
+	MaxCounterLabelsPerName  int `koanf:"max_counter_labels_per_name"`
 
 	APIKeyCacheTTL time.Duration `koanf:"api_key_cache_ttl"`
 
@@ -54,6 +59,8 @@ func publicDefaults() map[string]any {
 		"public.max_timestamp_skew_past":           defaultDayDuration,
 		"public.max_timestamp_skew_future":         "5m",
 		"public.max_error_reasons_per_tenant":      100,
+		"public.max_counter_names_per_tenant":      200,
+		"public.max_counter_labels_per_name":       50,
 
 		"public.api_key_cache_ttl": "60s",
 

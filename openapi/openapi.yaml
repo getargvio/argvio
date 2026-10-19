@@ -1106,6 +1106,119 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /v1/metrics/counters:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
+    get:
+      summary: Vendor-defined counters, listed with totals or one as a time series
+      description: |
+        Counts sent by the CLI as the `cli.counter` metric (a delta,
+        monotonic sum): each data point adds its value to the counter named by
+        `cli.counter.name`, optionally broken down by `cli.counter.label`.
+
+        **Warning: counters are accepted at the `anonymous` consent tier**, so
+        they are reported from CI and from users who allow no install
+        identifier. Names and labels must be fixed identifiers chosen in the
+        CLI's code, never user input, file paths, host names, URLs, tokens or
+        anything derived from them. The SDK does not scrub them; the server
+        only checks them against `^[a-z0-9][a-z0-9._-]*$` (at most 64
+        characters) and caps how many distinct values each tenant may have.
+
+        Without `name`, returns every counter name with its total over the
+        window, largest first, plus `overflow`: how many data points were stored
+        under `other` since the tenant started sending counters, because it had
+        reached `public.max_counter_names_per_tenant` distinct names
+        (`folded_names`; the label is dropped too) or a counter had reached
+        `public.max_counter_labels_per_name` distinct labels (`folded_labels`).
+        `bucket` does not apply. With `name`, returns that counter's total per
+        bucket (narrowed to one label with `label`) and its labels over the
+        whole window, largest first, capped at `limit`; a `null` label is data
+        points sent without one.
+
+        Read from hourly and daily rollups: totals for the current hour appear
+        once it is materialized, within about an hour.
+      operationId: counters
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - name: name
+          in: query
+          required: false
+          description: Counter name. Switches the response to that counter's series and labels.
+          schema: { type: string }
+        - name: label
+          in: query
+          required: false
+          description: Narrow the series to one label. Requires `name`.
+          schema: { type: string }
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/Command"
+        - $ref: "#/components/parameters/IsCI"
+        - $ref: "#/components/parameters/Bucket"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: A CounterList without `name`, a CounterDetail with it.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    oneOf:
+                      - $ref: "#/components/schemas/CounterList"
+                      - $ref: "#/components/schemas/CounterDetail"
+              examples:
+                list:
+                  summary: Without name
+                  value:
+                    data:
+                      counters:
+                        - name: rules.generated
+                          total: 18420
+                          datapoint_count: 951
+                          label_count: 5
+                        - name: openapi.security-schemes
+                          total: 3307
+                          datapoint_count: 1210
+                          label_count: 4
+                      overflow:
+                        folded_names: 0
+                        folded_labels: 12
+                        last_folded_at: "2026-10-18T14:02:11Z"
+                series:
+                  summary: With name=openapi.security-schemes&bucket=day
+                  value:
+                    data:
+                      name: openapi.security-schemes
+                      series:
+                        - bucket: "2026-10-17T00:00:00Z"
+                          total: 1544
+                          datapoint_count: 590
+                        - bucket: "2026-10-18T00:00:00Z"
+                          total: 1763
+                          datapoint_count: 620
+                      labels:
+                        - label: bearer
+                          total: 2210
+                        - label: apikey
+                          total: 905
+                        - label: null
+                          total: 192
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /v1/metrics/install-methods:
     parameters:
       - $ref: "#/components/parameters/TenantHeader"
@@ -1885,6 +1998,58 @@ components:
         discovered_within_30d: { type: integer }
         median_seconds: { type: number, description: "Median first-use minus first_seen over discoverers; negative gaps count as 0" }
       required: [kind, name, cohort_size, installs, discovered_within_1d, discovered_within_7d, discovered_within_30d, median_seconds]
+
+    CounterTotal:
+      type: object
+      properties:
+        name: { type: string }
+        total: { type: number, description: "Sum of the counter's data point values over the window." }
+        datapoint_count: { type: integer, description: "Data points behind the total (roughly, process exports)." }
+        label_count: { type: integer, description: "Distinct labels it was reported with, including other." }
+      required: [name, total, datapoint_count, label_count]
+
+    CounterOverflow:
+      type: object
+      description: Data points stored under "other" since the tenant's counters were first recorded, by which cap folded them.
+      properties:
+        folded_names: { type: integer }
+        folded_labels: { type: integer }
+        last_folded_at: { type: string, format: date-time, nullable: true }
+      required: [folded_names, folded_labels, last_folded_at]
+
+    CounterList:
+      type: object
+      properties:
+        counters:
+          type: array
+          items: { $ref: "#/components/schemas/CounterTotal" }
+        overflow: { $ref: "#/components/schemas/CounterOverflow" }
+      required: [counters, overflow]
+
+    CounterPoint:
+      type: object
+      properties:
+        bucket: { type: string, format: date-time }
+        total: { type: number }
+        datapoint_count: { type: integer }
+      required: [bucket, total, datapoint_count]
+
+    CounterDetail:
+      type: object
+      properties:
+        name: { type: string }
+        series:
+          type: array
+          items: { $ref: "#/components/schemas/CounterPoint" }
+        labels:
+          type: array
+          items:
+            type: object
+            properties:
+              label: { type: string, nullable: true, description: "null for data points sent without a label; other for labels past the cap" }
+              total: { type: number }
+            required: [label, total]
+      required: [name, series, labels]
 
     VersionChangePoint:
       type: object
