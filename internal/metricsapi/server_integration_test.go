@@ -481,6 +481,66 @@ func TestMetricsAPI_EndToEnd_Live(t *testing.T) {
 			t.Errorf("after lowering the ceiling to basic: got %+v, want none", got)
 		}
 	})
+
+	t.Run("error types group by reason on request, tenant scoped", func(t *testing.T) {
+		var errs []storage.LogRow
+		add := func(id uuid.UUID, reason string, n int) {
+			for range n {
+				errs = append(errs, storage.LogRow{
+					Time: now.Add(-time.Minute), TenantID: id, EventName: "cli.error.raised", CommandName: strp("login"),
+					ConsentTier: "basic", LogAttributes: storage.Attrs{"cli.error.type": "auth", "cli.error.reason": reason},
+				})
+			}
+		}
+		add(tenantID, "no-token", 2)
+		add(tenantID, "expired-token", 1)
+		add(otherTenantID, "no-token", 7)
+		if _, err := w.InsertLogs(ctx, errs); err != nil {
+			t.Fatalf("insert error logs: %v", err)
+		}
+		query := "/v1/metrics/error-types?bucket=day&command=login&from=" + url.QueryEscape(fromParam)
+
+		resp := get(t, query+"&group_by=reason")
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200", resp.StatusCode)
+		}
+		var byReason struct {
+			Data []storage.ErrorReasonPoint `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&byReason); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		got := map[string]int64{}
+		for _, p := range byReason.Data {
+			got[*p.ErrorType+"/"+*p.ErrorReason] += p.ErrorCount
+		}
+		if len(got) != 2 || got["auth/no-token"] != 2 || got["auth/expired-token"] != 1 {
+			t.Errorf("group_by=reason: %v, want this tenant's no-token=2, expired-token=1", got)
+		}
+
+		// The default shape is unchanged: no error_reason key at all.
+		resp = get(t, query)
+		defer resp.Body.Close()
+		var byType struct {
+			Data []map[string]any `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&byType); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(byType.Data) != 1 || byType.Data[0]["error_count"] != float64(3) {
+			t.Errorf("default grouping: %v, want one auth row with 3 errors", byType.Data)
+		}
+		if _, ok := byType.Data[0]["error_reason"]; ok {
+			t.Error("default grouping should not carry error_reason")
+		}
+
+		resp = get(t, query+"&group_by=message")
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("group_by=message: status = %d, want 400", resp.StatusCode)
+		}
+	})
 }
 
 // TestMetricsAPI_OIDC_Live runs the whole path against a real Postgres: a

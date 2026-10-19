@@ -9,7 +9,10 @@
 // resolved through a *Schema loaded from this file.
 package allowlist
 
-import "fmt"
+import (
+	"fmt"
+	"regexp"
+)
 
 // AttrType is the accepted value type for an attribute.
 type AttrType string
@@ -32,14 +35,19 @@ type Tier struct {
 // AttrDef describes one attribute key: its type, bounds, and the minimum
 // consent tier a record must declare for the attribute to be retained.
 type AttrDef struct {
-	Key         string   `yaml:"-"` // populated from the map key
-	Type        AttrType `yaml:"type"`
-	Enum        []string `yaml:"enum,omitempty"`
-	MaxLength   int      `yaml:"max_length,omitempty"`
-	MaxItems    int      `yaml:"max_items,omitempty"`
-	MinTier     string   `yaml:"min_tier"`
-	Sensitive   bool     `yaml:"sensitive"`
-	Description string   `yaml:"description,omitempty"`
+	Key       string   `yaml:"-"` // populated from the map key
+	Type      AttrType `yaml:"type"`
+	Enum      []string `yaml:"enum,omitempty"`
+	MaxLength int      `yaml:"max_length,omitempty"`
+	MaxItems  int      `yaml:"max_items,omitempty"`
+	// Pattern, if set, is a regular expression a string value must match
+	// in full (anchor it with ^...$). Compiled once by finalize.
+	Pattern     string `yaml:"pattern,omitempty"`
+	MinTier     string `yaml:"min_tier"`
+	Sensitive   bool   `yaml:"sensitive"`
+	Description string `yaml:"description,omitempty"`
+
+	pattern *regexp.Regexp
 }
 
 // MetricDef describes one allowed metric name.
@@ -172,6 +180,16 @@ func (s *Schema) finalize() error {
 		def.Key = k
 		if _, ok := s.tierRank[def.MinTier]; !ok {
 			return fmt.Errorf("allowlist: attribute %q references unknown min_tier %q", k, def.MinTier)
+		}
+		if def.Pattern != "" {
+			if def.Type != AttrString {
+				return fmt.Errorf("allowlist: attribute %q: pattern is only supported on type string", k)
+			}
+			re, err := regexp.Compile(def.Pattern)
+			if err != nil {
+				return fmt.Errorf("allowlist: attribute %q: invalid pattern: %w", k, err)
+			}
+			def.pattern = re
 		}
 		s.Attributes[k] = def
 	}

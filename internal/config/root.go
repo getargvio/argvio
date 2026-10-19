@@ -63,6 +63,9 @@ func (r Root) ValidatePublic() error {
 	if r.Public.MaxTimestampSkewPast <= 0 || r.Public.MaxTimestampSkewFuture <= 0 {
 		errs = append(errs, "public.max_timestamp_skew_past and max_timestamp_skew_future must be > 0")
 	}
+	if r.Public.MaxErrorReasonsPerTenant <= 0 {
+		errs = append(errs, "public.max_error_reasons_per_tenant must be > 0")
+	}
 	if r.Public.APIKeyCacheTTL <= 0 {
 		errs = append(errs, "public.api_key_cache_ttl must be > 0")
 	}

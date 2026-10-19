@@ -3,7 +3,7 @@ package allowlist
 import "fmt"
 
 // CheckAttribute validates that value conforms to def's declared type and
-// bounds (max length, max items, enum membership). It operates on plain Go
+// bounds (max length, max items, enum membership, pattern). It operates on plain Go
 // values (string, int64, bool, float64, []string) so this package stays free
 // of any OTLP/pdata dependency — callers (internal/otlp) are responsible for
 // converting pcommon.Value into these native forms first.
@@ -19,6 +19,9 @@ func CheckAttribute(def AttrDef, value any) error {
 		}
 		if len(def.Enum) > 0 && !contains(def.Enum, s) {
 			return fmt.Errorf("value %q not in allowed enum %v", s, def.Enum)
+		}
+		if def.pattern != nil && !def.pattern.MatchString(s) {
+			return fmt.Errorf("value does not match pattern %s", def.Pattern)
 		}
 		return nil
 	case AttrInt:

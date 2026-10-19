@@ -94,6 +94,8 @@ var descriptions = map[string]string{
 	"public.jwt_rate_limit_bytes_per_second":    "Byte-rate limit for jwt/oidc-authenticated requests. 0 (default) means \"use rate_limit_bytes_per_second instead\".",
 	"public.jwt_rate_limit_burst":               "Request-burst size for jwt/oidc-authenticated requests. 0 (default) means \"use rate_limit_burst instead\".",
 
+	"public.max_error_reasons_per_tenant": "Distinct cli.error.reason values kept per tenant. A new value past the cap is stored as \"other\" and counted in error_reason_overflow (see docs/allowlist.md).",
+
 	"public.allowlist_schema_path": "Path to the versioned allowlist/tier schema YAML (see docs/allowlist.md). The metrics server reads it too, for the consent tier ranking.",
 	"public.allowlist_hot_reload":  "Watch allowlist_schema_path and hot-reload on change without a restart.",
 

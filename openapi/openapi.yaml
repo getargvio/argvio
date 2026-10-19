@@ -634,7 +634,7 @@ paths:
     parameters:
       - $ref: "#/components/parameters/TenantHeader"
     get:
-      summary: Error counts per error category, per command, time-bucketed
+      summary: Error counts per error category (optionally per reason), per command, time-bucketed
       description: >
         Distribution of the coarse, vendor-assigned error category
         (user, validation, network, auth, internal, timeout, canceled,
@@ -643,6 +643,17 @@ paths:
         which requires a high enough consent tier, so totals are lower than
         /v1/metrics/error-rate. Reads raw logs, so it is bounded by log
         retention. exit_code and attr.* filters do not apply.
+
+
+        With group_by=reason, each category is further split by
+        cli.error.reason, the vendor's finer cause from its own fixed
+        vocabulary, and each row is an ErrorReasonPoint instead.
+        error_reason is null for events without one (SDKs that don't send it,
+        or a value dropped for not matching ^[a-z0-9][a-z0-9._-]*$), and
+        "other" for new values received once the tenant already had
+        public.max_error_reasons_per_tenant distinct reasons (see
+        docs/allowlist.md). The value is vendor-defined; the SDK doesn't
+        scrub it.
       operationId: errorTypes
       parameters:
         - $ref: "#/components/parameters/From"
@@ -653,26 +664,61 @@ paths:
         - $ref: "#/components/parameters/Command"
         - $ref: "#/components/parameters/IsCI"
         - $ref: "#/components/parameters/Bucket"
+        - name: group_by
+          in: query
+          required: false
+          description: >
+            type (default) counts per error category; reason also splits each
+            category by cli.error.reason.
+          schema: { type: string, enum: [type, reason], default: type }
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Offset"
       responses:
         "200":
-          description: Per-bucket, per-command, per-error-type counts.
+          description: >
+            Per-bucket, per-command, per-error-type counts; with
+            group_by=reason, per error type and reason.
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   data:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/ErrorTypePoint"
-              example:
-                data:
-                  - bucket: "2026-08-12T00:00:00Z"
-                    command_name: "deploy"
-                    error_type: "network"
-                    error_count: 4
+                    oneOf:
+                      - type: array
+                        items:
+                          $ref: "#/components/schemas/ErrorTypePoint"
+                      - type: array
+                        items:
+                          $ref: "#/components/schemas/ErrorReasonPoint"
+              examples:
+                byType:
+                  summary: Default (group_by=type)
+                  value:
+                    data:
+                      - bucket: "2026-08-12T00:00:00Z"
+                        command_name: "deploy"
+                        error_type: "network"
+                        error_count: 4
+                byReason:
+                  summary: group_by=reason
+                  value:
+                    data:
+                      - bucket: "2026-08-12T00:00:00Z"
+                        command_name: "deploy"
+                        error_type: "auth"
+                        error_reason: "expired-token"
+                        error_count: 2
+                      - bucket: "2026-08-12T00:00:00Z"
+                        command_name: "deploy"
+                        error_type: "auth"
+                        error_reason: "no-token"
+                        error_count: 9
+                      - bucket: "2026-08-12T00:00:00Z"
+                        command_name: "deploy"
+                        error_type: "network"
+                        error_reason: null
+                        error_count: 4
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -1754,6 +1800,22 @@ components:
         error_type: { type: string, nullable: true, description: "null when the event carried no category" }
         error_count: { type: integer }
       required: [bucket, command_name, error_type, error_count]
+
+    ErrorReasonPoint:
+      type: object
+      properties:
+        bucket: { type: string, format: date-time }
+        command_name: { type: string, nullable: true }
+        error_type: { type: string, nullable: true, description: "null when the event carried no category" }
+        error_reason:
+          type: string
+          nullable: true
+          description: >
+            Vendor-assigned reason within error_type, matching
+            ^[a-z0-9][a-z0-9._-]*$; null when the event carried none, "other"
+            when it arrived past the tenant's distinct-reason cap
+        error_count: { type: integer }
+      required: [bucket, command_name, error_type, error_reason, error_count]
 
     ErrorFingerprint:
       type: object

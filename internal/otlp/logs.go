@@ -67,6 +67,13 @@ func (p *Pipeline) ProcessLogs(ctx context.Context, ld plog.Logs) (accepted, rej
 	}
 
 	if len(rows) > 0 {
+		attrs := make([]storage.Attrs, len(rows))
+		for i := range rows {
+			attrs[i] = rows[i].LogAttributes
+		}
+		if err := p.capErrorReasons(ctx, attrs); err != nil {
+			return 0, int64(ld.LogRecordCount()), "", err
+		}
 		if _, werr := p.Writer.InsertLogs(ctx, rows); werr != nil {
 			return 0, int64(ld.LogRecordCount()), "", werr
 		}

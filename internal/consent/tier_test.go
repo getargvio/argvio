@@ -210,3 +210,24 @@ func TestEvaluateEvent_JourneyAttributesByTier(t *testing.T) {
 		}
 	}
 }
+
+// A malformed error reason is dropped like any other invalid value; the
+// error record itself is kept.
+func TestEvaluateEvent_ErrorReasonPattern(t *testing.T) {
+	s := loadSchema(t)
+	def := logEventDef(s, "cli.error.raised")
+	for value, keep := range map[string]bool{"no-token": true, "could not open /home/alice": false} {
+		dec := EvaluateEvent(s, def, "basic", "basic", ModeStrip, map[string]any{"cli.error.reason": value})
+		if !dec.Accepted {
+			t.Fatalf("%q: record rejected: %s", value, dec.RejectReason)
+		}
+		if _, kept := dec.KeptAttributes["cli.error.reason"]; kept != keep {
+			t.Errorf("%q: kept = %v, want %v", value, kept, keep)
+		}
+	}
+	// Basic tier: an anonymous record loses it.
+	dec := EvaluateEvent(s, def, "anonymous", "basic", ModeStrip, map[string]any{"cli.error.reason": "no-token"})
+	if _, kept := dec.KeptAttributes["cli.error.reason"]; kept {
+		t.Error("anonymous tier should strip cli.error.reason")
+	}
+}
