@@ -8,6 +8,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog"
 
 	"github.com/getargvio/argvio/internal/consent"
+	"github.com/getargvio/argvio/internal/errfp"
 	"github.com/getargvio/argvio/internal/storage"
 )
 
@@ -66,6 +67,13 @@ func (p *Pipeline) ProcessLogs(ctx context.Context, ld plog.Logs) (accepted, rej
 	}
 
 	if len(rows) > 0 {
+		attrs := make([]storage.Attrs, len(rows))
+		for i := range rows {
+			attrs[i] = rows[i].LogAttributes
+		}
+		if err := p.capErrorReasons(ctx, attrs); err != nil {
+			return 0, int64(ld.LogRecordCount()), "", err
+		}
 		if _, werr := p.Writer.InsertLogs(ctx, rows); werr != nil {
 			return 0, int64(ld.LogRecordCount()), "", werr
 		}
@@ -79,6 +87,7 @@ func (p *Pipeline) buildLogRow(rec plog.LogRecord, scope pcommon.Instrumentation
 	kept := decision.KeptAttributes
 	promo := popPromoted(kept)
 	foot := popSessionFootprint(kept)
+	fingerprint := errorFingerprint(rec.EventName(), kept)
 	resourceJSON, logJSON := p.splitRemainingAttrs(kept)
 
 	var traceID, spanID *string
@@ -123,12 +132,30 @@ func (p *Pipeline) buildLogRow(rec plog.LogRecord, scope pcommon.Instrumentation
 		IsCI:               promo.IsCI,
 		BinarySizeBytes:    foot.BinarySizeBytes,
 		StartupMs:          foot.StartupMs,
+		ErrorFingerprint:   fingerprint,
 		ConsentTier:        decision.EffectiveTier,
 		ScopeName:          strPtrOrNil(scope.Name()),
 		ScopeVersion:       strPtrOrNil(scope.Version()),
 		ResourceAttributes: resourceJSON,
 		LogAttributes:      logJSON,
 	}
+}
+
+// errorFingerprint groups a cli.error.raised record by failure cause. It
+// reads only what tier stripping kept, so a fingerprint never encodes a
+// message or stack the record's effective tier didn't allow storing. Both
+// stay in log_attributes as well: the metrics API samples them.
+func errorFingerprint(eventName string, kept map[string]any) *string {
+	if eventName != errfp.EventName {
+		return nil
+	}
+	msg, _ := kept[errfp.AttrMessage].(string)
+	stack, _ := kept[errfp.AttrStacktrace].(string)
+	r, ok := errfp.Compute(msg, stack)
+	if !ok {
+		return nil
+	}
+	return &r.Fingerprint
 }
 
 // trackInstalls folds the batch's install-bearing records into the installs

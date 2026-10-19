@@ -86,6 +86,13 @@ func (p *Pipeline) ProcessMetrics(ctx context.Context, md pmetric.Metrics) (acce
 	}
 
 	if len(rows) > 0 {
+		attrs := make([]storage.Attrs, len(rows))
+		for i := range rows {
+			attrs[i] = rows[i].DatapointAttributes
+		}
+		if err := p.capErrorReasons(ctx, attrs); err != nil {
+			return 0, int64(md.DataPointCount()), "", err
+		}
 		if _, werr := p.Writer.InsertMetrics(ctx, rows); werr != nil {
 			return 0, int64(md.DataPointCount()), "", werr
 		}

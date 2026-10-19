@@ -123,6 +123,7 @@ func runPublic(cfg *config.Root, log *slog.Logger) error {
 		MaxAttributeStringValueLength: cfg.Public.MaxAttributeStringValueLength,
 		MaxTimestampSkewPast:          cfg.Public.MaxTimestampSkewPast,
 		MaxTimestampSkewFuture:        cfg.Public.MaxTimestampSkewFuture,
+		MaxErrorReasonsPerTenant:      cfg.Public.MaxErrorReasonsPerTenant,
 	}
 
 	srv := otlp.NewServer(verifier, schemaLoader, storage.NewWriter(pool), bounds, limiter, log)

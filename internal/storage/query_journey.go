@@ -38,15 +38,7 @@ func (q *QueryBuilder) ErrorTypes(ctx context.Context, scope TenantScope, f Filt
 		return nil, err
 	}
 
-	pb := newScopedPredicates(scope, "tenant_id")
-	pb.add("event_name = $%d", "cli.error.raised")
-	pb.add("time >= $%d", f.Time.From)
-	pb.add("time < $%d", f.Time.To)
-	pb.addIfAnyStr("command_name", f.CommandNames)
-	pb.addIfAnyStr("cli_version", f.CLIVersions)
-	pb.addIfAnyStr("os", f.OSes)
-	pb.addIfAnyStr("arch", f.Arches)
-	pb.addIfNotNilBool("is_ci", f.IsCI)
+	pb := errorEventPredicates(scope, f)
 	limitPh := pb.nextPlaceholder(clampLimit(f.Limit))
 	offsetPh := pb.nextPlaceholder(f.Offset)
 
@@ -73,6 +65,74 @@ LIMIT %s OFFSET %s`, bucketExpr, pb.where(), limitPh, offsetPh)
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// ErrorReasonPoint is one (bucket, command, error type, error reason) error
+// count. ErrorReason is the vendor's finer cause within ErrorType, nil when
+// the event carried none (an SDK that doesn't send it, or a value the
+// allowlist pattern dropped), and "other" for values past the tenant's
+// reason cap.
+type ErrorReasonPoint struct {
+	Bucket      time.Time `json:"bucket"`
+	CommandName *string   `json:"command_name"`
+	ErrorType   *string   `json:"error_type"`
+	ErrorReason *string   `json:"error_reason"`
+	ErrorCount  int64     `json:"error_count"`
+}
+
+// ErrorReasons is ErrorTypes broken down further by cli.error.reason. The
+// reason is basic tier, but it is read from the same cli.error.raised events,
+// so the same undercount and log retention bound apply.
+func (q *QueryBuilder) ErrorReasons(ctx context.Context, scope TenantScope, f Filters, bucket Bucket) ([]ErrorReasonPoint, error) {
+	bucketExpr, err := logBucketExpr(bucket)
+	if err != nil {
+		return nil, err
+	}
+	pb := errorEventPredicates(scope, f)
+	limitPh := pb.nextPlaceholder(clampLimit(f.Limit))
+	offsetPh := pb.nextPlaceholder(f.Offset)
+
+	sql := fmt.Sprintf(`
+SELECT %s AS bucket, command_name,
+       log_attributes ->> 'cli.error.type' AS error_type,
+       log_attributes ->> 'cli.error.reason' AS error_reason,
+       count(*) AS error_count
+FROM logs
+WHERE %s
+GROUP BY 1, 2, 3, 4
+ORDER BY 1 ASC, 2 ASC NULLS LAST, 3 ASC NULLS LAST, 4 ASC NULLS LAST
+LIMIT %s OFFSET %s`, bucketExpr, pb.where(), limitPh, offsetPh)
+
+	rows, err := q.pool.Query(ctx, sql, pb.args...)
+	if err != nil {
+		return nil, fmt.Errorf("storage: error reasons: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ErrorReasonPoint
+	for rows.Next() {
+		var r ErrorReasonPoint
+		if err := rows.Scan(&r.Bucket, &r.CommandName, &r.ErrorType, &r.ErrorReason, &r.ErrorCount); err != nil {
+			return nil, fmt.Errorf("storage: scan error reasons: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// errorEventPredicates selects the tenant's cli.error.raised events in f.Time
+// with the command, version, os, arch and is_ci filters.
+func errorEventPredicates(scope TenantScope, f Filters) *predicateBuilder {
+	pb := newScopedPredicates(scope, "tenant_id")
+	pb.add("event_name = $%d", "cli.error.raised")
+	pb.add("time >= $%d", f.Time.From)
+	pb.add("time < $%d", f.Time.To)
+	pb.addIfAnyStr("command_name", f.CommandNames)
+	pb.addIfAnyStr("cli_version", f.CLIVersions)
+	pb.addIfAnyStr("os", f.OSes)
+	pb.addIfAnyStr("arch", f.Arches)
+	pb.addIfNotNilBool("is_ci", f.IsCI)
+	return pb
 }
 
 // --- friction signals: help views and interrupted runs ------------------

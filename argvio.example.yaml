@@ -86,6 +86,9 @@ public:
   http_listen_addr: "0.0.0.0:4318"
   allowlist_schema_path: "schema/allowlist/v1.yaml"
   allowlist_hot_reload: true
+  # Distinct cli.error.reason values kept per tenant; new ones past the cap
+  # are stored as "other" (docs/allowlist.md).
+  max_error_reasons_per_tenant: 100
   rate_limit_requests_per_second: 200
   rate_limit_bytes_per_second: 5000000
   rate_limit_burst: 400

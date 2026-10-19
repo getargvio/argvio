@@ -18,6 +18,7 @@ import (
 
 	"github.com/getargvio/argvio/internal/allowlist"
 	"github.com/getargvio/argvio/internal/consent"
+	"github.com/getargvio/argvio/internal/errfp"
 	"github.com/getargvio/argvio/internal/storage"
 	"github.com/getargvio/argvio/internal/tenant"
 )
@@ -30,6 +31,7 @@ func testBounds() Bounds {
 		MaxAttributeStringValueLength: 4096,
 		MaxTimestampSkewPast:          24 * time.Hour,
 		MaxTimestampSkewFuture:        5 * time.Minute,
+		MaxErrorReasonsPerTenant:      100,
 	}
 }
 
@@ -430,6 +432,164 @@ func TestProcessLogs_SessionFootprint_Live(t *testing.T) {
 	// Binary size is optional: a runtime with no single binary still reports startup.
 	if r := read("startuponly"); r.size != nil || !eq(r.startup, 7) {
 		t.Errorf("startuponly: want size NULL and startup 7, got size=%v startup=%v", r.size, r.startup)
+	}
+}
+
+func TestProcessLogs_ErrorFingerprint_Live(t *testing.T) {
+	pipeline, pool, tenantID := setupPipeline(t, "full", consent.ModeStrip)
+	ctx := context.Background()
+	now := time.Now()
+
+	msg := "open /home/alice/.toolrc: permission denied"
+	ld := plog.NewLogs()
+	addError := func(tier, label, stack string) {
+		rl := ld.ResourceLogs().AppendEmpty()
+		rl.Resource().Attributes().PutStr("cli.analytics.tier", tier)
+		rec := rl.ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+		rec.SetEventName(errfp.EventName)
+		rec.SetTimestamp(pcommon.NewTimestampFromTime(now))
+		rec.Attributes().PutStr("cli.version", label)
+		rec.Attributes().PutStr(errfp.AttrMessage, msg)
+		if stack != "" {
+			rec.Attributes().PutStr(errfp.AttrStacktrace, stack)
+		}
+	}
+	stack := "main.load()\n\t/home/alice/src/tool/load.go:12 +0x1d"
+	addError("full", "message", "")
+	addError("full", "stack", stack)
+	// Message and stack are full-tier: a basic record loses both, so there
+	// is nothing to fingerprint.
+	addError("basic", "stripped", stack)
+
+	if accepted, rejected, sample, err := pipeline.ProcessLogs(ctx, ld); err != nil || accepted != 3 || rejected != 0 {
+		t.Fatalf("ProcessLogs: accepted=%d rejected=%d sample=%q err=%v, want 3/0", accepted, rejected, sample, err)
+	}
+	read := func(label string) *string {
+		t.Helper()
+		var fp *string
+		if err := pool.QueryRow(ctx, `SELECT error_fingerprint FROM logs WHERE tenant_id=$1 AND cli_version=$2`, tenantID, label).Scan(&fp); err != nil {
+			t.Fatalf("read %s: %v", label, err)
+		}
+		return fp
+	}
+	byMessage, _ := errfp.Compute(msg, "")
+	byStack, _ := errfp.Compute(msg, stack)
+	if fp := read("message"); fp == nil || *fp != byMessage.Fingerprint {
+		t.Errorf("message-only error: fingerprint %v, want %s", fp, byMessage.Fingerprint)
+	}
+	if fp := read("stack"); fp == nil || *fp != byStack.Fingerprint {
+		t.Errorf("error with stack: fingerprint %v, want %s", fp, byStack.Fingerprint)
+	}
+	if fp := read("stripped"); fp != nil {
+		t.Errorf("basic-tier error: fingerprint %q, want NULL", *fp)
+	}
+}
+
+func TestProcessLogs_ErrorReason_Live(t *testing.T) {
+	pipeline, pool, tenantID := setupPipeline(t, "basic", consent.ModeStrip)
+	pipeline.Bounds.MaxErrorReasonsPerTenant = 2
+	ctx := context.Background()
+	now := time.Now()
+
+	// Each record is labelled by its cli.version so it can be found again.
+	ld := plog.NewLogs()
+	addError := func(tier, label, reason string) {
+		rl := ld.ResourceLogs().AppendEmpty()
+		rl.Resource().Attributes().PutStr("cli.analytics.tier", tier)
+		rec := rl.ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+		rec.SetEventName("cli.error.raised")
+		rec.SetTimestamp(pcommon.NewTimestampFromTime(now))
+		rec.Attributes().PutStr("cli.version", label)
+		rec.Attributes().PutStr("cli.error.type", "auth")
+		if reason != "" {
+			rec.Attributes().PutStr("cli.error.reason", reason)
+		}
+	}
+	addError("basic", "valid", "no-token")
+	addError("basic", "valid-again", "no-token")
+	addError("basic", "second", "expired-token")
+	// Third distinct reason with the cap at 2: ties on frequency go by name,
+	// so this one, last by name, is folded.
+	addError("basic", "over-cap", "wrong-scope")
+	addError("basic", "free-text", "could not read /home/alice/.toolrc")
+	addError("anonymous", "anonymous", "no-token")
+	addError("basic", "old-sdk", "")
+
+	if accepted, rejected, sample, err := pipeline.ProcessLogs(ctx, ld); err != nil || accepted != 7 || rejected != 0 {
+		t.Fatalf("ProcessLogs: accepted=%d rejected=%d sample=%q err=%v, want 7/0", accepted, rejected, sample, err)
+	}
+	read := func(label string) *string {
+		t.Helper()
+		var reason *string
+		if err := pool.QueryRow(ctx, `SELECT log_attributes ->> 'cli.error.reason' FROM logs WHERE tenant_id=$1 AND cli_version=$2`, tenantID, label).Scan(&reason); err != nil {
+			t.Fatalf("read %s: %v", label, err)
+		}
+		return reason
+	}
+	want := map[string]string{
+		"valid": "no-token", "valid-again": "no-token", "second": "expired-token",
+		"over-cap": "other",
+		// Dropped by the allowlist pattern, below the tier, or never sent.
+		"free-text": "", "anonymous": "", "old-sdk": "",
+	}
+	for label, w := range want {
+		got := read(label)
+		gotStr := ""
+		if got != nil {
+			gotStr = *got
+		}
+		if gotStr != w {
+			t.Errorf("%s: reason = %q, want %q", label, gotStr, w)
+		}
+	}
+	var folded int64
+	if err := pool.QueryRow(ctx, `SELECT folded_count FROM error_reason_overflow WHERE tenant_id=$1`, tenantID).Scan(&folded); err != nil || folded != 1 {
+		t.Errorf("overflow folded_count = %d (err %v), want 1", folded, err)
+	}
+}
+
+func TestProcessMetrics_ErrorReason_Live(t *testing.T) {
+	pipeline, pool, tenantID := setupPipeline(t, "basic", consent.ModeStrip)
+	pipeline.Bounds.MaxErrorReasonsPerTenant = 1
+	ctx := context.Background()
+	now := time.Now()
+
+	md := pmetric.NewMetrics()
+	rm := md.ResourceMetrics().AppendEmpty()
+	rm.Resource().Attributes().PutStr("cli.analytics.tier", "basic")
+	m := rm.ScopeMetrics().AppendEmpty().Metrics().AppendEmpty()
+	m.SetName("cli.errors")
+	m.SetUnit("1")
+	m.SetEmptySum().SetIsMonotonic(true)
+	for _, reason := range []string{"no-token", "invalid-url", ""} {
+		dp := m.Sum().DataPoints().AppendEmpty()
+		dp.SetTimestamp(pcommon.NewTimestampFromTime(now))
+		dp.SetIntValue(1)
+		dp.Attributes().PutStr("cli.error.type", "auth")
+		if reason != "" {
+			dp.Attributes().PutStr("cli.error.reason", reason)
+		}
+	}
+
+	if accepted, rejected, sample, err := pipeline.ProcessMetrics(ctx, md); err != nil || accepted != 3 || rejected != 0 {
+		t.Fatalf("ProcessMetrics: accepted=%d rejected=%d sample=%q err=%v, want 3/0", accepted, rejected, sample, err)
+	}
+	rows, err := pool.Query(ctx, `SELECT coalesce(datapoint_attributes ->> 'cli.error.reason', '<none>') FROM metrics WHERE tenant_id=$1 AND metric_name='cli.errors'`, tenantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	got := map[string]int{}
+	for rows.Next() {
+		var r string
+		if err := rows.Scan(&r); err != nil {
+			t.Fatal(err)
+		}
+		got[r]++
+	}
+	// Cap of 1: the first reason by name is admitted, the other folds.
+	if len(got) != 3 || got["invalid-url"] != 1 || got["other"] != 1 || got["<none>"] != 1 {
+		t.Errorf("stored reasons = %v, want invalid-url, other and one without", got)
 	}
 }
 

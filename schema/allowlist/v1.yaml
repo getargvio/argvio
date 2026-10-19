@@ -211,6 +211,20 @@ attributes:
       it is a small fixed vocabulary assigned by the CLI vendor, never the
       error's own message or class name (those stay at full and above).
 
+  cli.error.reason:
+    type: string
+    max_length: 64
+    pattern: "^[a-z0-9][a-z0-9._-]*$"
+    min_tier: basic
+    sensitive: false
+    description: >
+      Finer failure cause within cli.error.type, e.g. "no-token" or
+      "config.read-failed". Basic tier because it is an identifier from a
+      fixed vocabulary defined in the CLI's code, never the error text. The
+      SDK does not scrub it: a value that fails the pattern is dropped, and
+      past public.max_error_reasons_per_tenant distinct values per tenant,
+      new ones are stored as "other" (docs/allowlist.md).
+
   cli.error.message:
     type: string
     max_length: 2048
@@ -314,6 +328,7 @@ metrics:
     allowed_attributes:
       - cli.command.name
       - cli.error.type
+      - cli.error.reason
       - cli.version
       - cli.os
       - cli.arch
@@ -380,6 +395,7 @@ logs:
     allowed_attributes:
       - cli.command.name
       - cli.error.type
+      - cli.error.reason
       - cli.error.message
       - cli.error.stacktrace
       - cli.version

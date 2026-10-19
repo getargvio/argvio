@@ -634,7 +634,7 @@ paths:
     parameters:
       - $ref: "#/components/parameters/TenantHeader"
     get:
-      summary: Error counts per error category, per command, time-bucketed
+      summary: Error counts per error category (optionally per reason), per command, time-bucketed
       description: >
         Distribution of the coarse, vendor-assigned error category
         (user, validation, network, auth, internal, timeout, canceled,
@@ -643,6 +643,17 @@ paths:
         which requires a high enough consent tier, so totals are lower than
         /v1/metrics/error-rate. Reads raw logs, so it is bounded by log
         retention. exit_code and attr.* filters do not apply.
+
+
+        With group_by=reason, each category is further split by
+        cli.error.reason, the vendor's finer cause from its own fixed
+        vocabulary, and each row is an ErrorReasonPoint instead.
+        error_reason is null for events without one (SDKs that don't send it,
+        or a value dropped for not matching ^[a-z0-9][a-z0-9._-]*$), and
+        "other" for new values received once the tenant already had
+        public.max_error_reasons_per_tenant distinct reasons (see
+        docs/allowlist.md). The value is vendor-defined; the SDK doesn't
+        scrub it.
       operationId: errorTypes
       parameters:
         - $ref: "#/components/parameters/From"
@@ -653,11 +664,129 @@ paths:
         - $ref: "#/components/parameters/Command"
         - $ref: "#/components/parameters/IsCI"
         - $ref: "#/components/parameters/Bucket"
+        - name: group_by
+          in: query
+          required: false
+          description: >
+            type (default) counts per error category; reason also splits each
+            category by cli.error.reason.
+          schema: { type: string, enum: [type, reason], default: type }
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Offset"
       responses:
         "200":
-          description: Per-bucket, per-command, per-error-type counts.
+          description: >
+            Per-bucket, per-command, per-error-type counts; with
+            group_by=reason, per error type and reason.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    oneOf:
+                      - type: array
+                        items:
+                          $ref: "#/components/schemas/ErrorTypePoint"
+                      - type: array
+                        items:
+                          $ref: "#/components/schemas/ErrorReasonPoint"
+              examples:
+                byType:
+                  summary: Default (group_by=type)
+                  value:
+                    data:
+                      - bucket: "2026-08-12T00:00:00Z"
+                        command_name: "deploy"
+                        error_type: "network"
+                        error_count: 4
+                byReason:
+                  summary: group_by=reason
+                  value:
+                    data:
+                      - bucket: "2026-08-12T00:00:00Z"
+                        command_name: "deploy"
+                        error_type: "auth"
+                        error_reason: "expired-token"
+                        error_count: 2
+                      - bucket: "2026-08-12T00:00:00Z"
+                        command_name: "deploy"
+                        error_type: "auth"
+                        error_reason: "no-token"
+                        error_count: 9
+                      - bucket: "2026-08-12T00:00:00Z"
+                        command_name: "deploy"
+                        error_type: "network"
+                        error_reason: null
+                        error_count: 4
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/metrics/error-fingerprints:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
+    get:
+      summary: Top failure causes, grouped by error fingerprint
+      description: >
+        Groups cli.error.raised events by a fingerprint of the normalized
+        stack trace, or of the normalized message when there is no stack, and
+        returns the top causes ranked by distinct affected installs
+        (cli.install_id), then by event count, then by fingerprint.
+
+
+        **Fingerprint.** With a stack, the innermost 5 frames, each reduced to
+        its function and the base name of its file: directories (home, temp
+        and module-cache paths), line and column numbers and program-counter
+        offsets are dropped, and Python tracebacks are read innermost first.
+        Without one, the message with quoted strings, UUIDs, URLs, absolute
+        paths, hex ids and numbers replaced by placeholders. The id is the
+        first 16 hex digits of a SHA-256 over the algorithm version, the
+        source and the normalized text. It is computed once at ingest, so a
+        change to the algorithm only regroups events ingested afterwards, and
+        events stored before the fingerprint existed are not included. See
+        docs/schema.md "Error fingerprints".
+
+
+        **Privacy.** Messages and stacks are full-tier attributes, so only
+        sessions at the full consent tier or above contribute: counts are
+        lower than /v1/metrics/error-rate and /v1/metrics/error-types. An
+        event also only counts if its recorded consent tier is at or below
+        the tenant's *current* tier ceiling, checked on every request, so
+        lowering the ceiling immediately hides detail stored under the old
+        one. message and top_frame are normalized (never the raw text),
+        taken from the most recent event, and truncated to 512 characters.
+
+
+        Reads raw logs, so it is bounded by log retention. first_seen and
+        last_seen are within the requested time range. trend omits buckets
+        without events. exit_code and attr.* filters do not apply.
+      operationId: errorFingerprints
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/Command"
+        - $ref: "#/components/parameters/IsCI"
+        - name: bucket
+          in: query
+          required: false
+          description: Granularity of each fingerprint's trend. All boundaries are UTC; week starts Monday.
+          schema: { type: string, enum: [hour, day, week, month], default: day }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: One page of failure causes, most installs affected first.
           content:
             application/json:
               schema:
@@ -666,13 +795,40 @@ paths:
                   data:
                     type: array
                     items:
-                      $ref: "#/components/schemas/ErrorTypePoint"
+                      $ref: "#/components/schemas/ErrorFingerprint"
               example:
                 data:
-                  - bucket: "2026-08-12T00:00:00Z"
-                    command_name: "deploy"
-                    error_type: "network"
-                    error_count: 4
+                  - fingerprint: "9f2c41d07ab35e18"
+                    source: "stack"
+                    message: "open <path>: permission denied"
+                    top_frame: "github.com/acme/tool/internal/config.Load config.go"
+                    event_count: 42
+                    affected_installs: 17
+                    first_seen: "2026-08-03T09:12:44Z"
+                    last_seen: "2026-08-12T18:40:02Z"
+                    commands: ["deploy", "init"]
+                    versions: ["1.9.0", "1.10.0"]
+                    trend:
+                      - bucket: "2026-08-11T00:00:00Z"
+                        event_count: 30
+                        affected_installs: 12
+                      - bucket: "2026-08-12T00:00:00Z"
+                        event_count: 12
+                        affected_installs: 8
+                  - fingerprint: "04be7a9c1d22f6e3"
+                    source: "message"
+                    message: "dial tcp <n>: connection refused"
+                    top_frame: null
+                    event_count: 9
+                    affected_installs: 3
+                    first_seen: "2026-08-10T07:01:10Z"
+                    last_seen: "2026-08-12T11:22:31Z"
+                    commands: ["deploy"]
+                    versions: ["1.10.0"]
+                    trend:
+                      - bucket: "2026-08-10T00:00:00Z"
+                        event_count: 9
+                        affected_installs: 3
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -1644,6 +1800,49 @@ components:
         error_type: { type: string, nullable: true, description: "null when the event carried no category" }
         error_count: { type: integer }
       required: [bucket, command_name, error_type, error_count]
+
+    ErrorReasonPoint:
+      type: object
+      properties:
+        bucket: { type: string, format: date-time }
+        command_name: { type: string, nullable: true }
+        error_type: { type: string, nullable: true, description: "null when the event carried no category" }
+        error_reason:
+          type: string
+          nullable: true
+          description: >
+            Vendor-assigned reason within error_type, matching
+            ^[a-z0-9][a-z0-9._-]*$; null when the event carried none, "other"
+            when it arrived past the tenant's distinct-reason cap
+        error_count: { type: integer }
+      required: [bucket, command_name, error_type, error_reason, error_count]
+
+    ErrorFingerprint:
+      type: object
+      properties:
+        fingerprint: { type: string, description: "Stable id: 16 hex digits, the same for every request while the algorithm version is unchanged" }
+        source: { type: string, enum: [stack, message], description: "What the fingerprint was computed from" }
+        message: { type: string, nullable: true, description: "Normalized message of the most recent event, at most 512 characters; null when it had none" }
+        top_frame: { type: string, nullable: true, description: "Normalized innermost stack frame (function and file name) of the most recent event, at most 512 characters; null without a stack" }
+        event_count: { type: integer }
+        affected_installs: { type: integer, description: "Distinct cli.install_id values" }
+        first_seen: { type: string, format: date-time }
+        last_seen: { type: string, format: date-time }
+        commands: { type: array, items: { type: string }, description: "Every command name seen, sorted" }
+        versions: { type: array, items: { type: string }, description: "Every CLI version seen, oldest first" }
+        trend:
+          type: array
+          items:
+            $ref: "#/components/schemas/ErrorFingerprintPoint"
+      required: [fingerprint, source, message, top_frame, event_count, affected_installs, first_seen, last_seen, commands, versions, trend]
+
+    ErrorFingerprintPoint:
+      type: object
+      properties:
+        bucket: { type: string, format: date-time }
+        event_count: { type: integer }
+        affected_installs: { type: integer }
+      required: [bucket, event_count, affected_installs]
 
     FrictionPoint:
       type: object

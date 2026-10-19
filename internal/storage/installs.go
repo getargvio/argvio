@@ -366,6 +366,10 @@ func sweepInstalls(ctx context.Context, pool *pgxpool.Pool, days int, tenantPred
 		                WHERE i.tenant_id = install_discoveries.tenant_id AND i.install_id = install_discoveries.install_id)`, cutoff, tenantArg); err != nil {
 		return 0, fmt.Errorf("storage: sweep orphan install discoveries: %w", err)
 	}
+	// Error reasons no longer sent free their slot under the per-tenant cap.
+	if _, err := tx.Exec(ctx, `DELETE FROM error_reasons WHERE last_seen < $1 AND `+tenantPred, cutoff, tenantArg); err != nil {
+		return 0, fmt.Errorf("storage: sweep error reasons: %w", err)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("storage: sweep installs: %w", err)
 	}

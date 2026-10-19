@@ -19,6 +19,10 @@ type PublicConfig struct {
 	MaxTimestampSkewPast          time.Duration `koanf:"max_timestamp_skew_past"`
 	MaxTimestampSkewFuture        time.Duration `koanf:"max_timestamp_skew_future"`
 
+	// Distinct cli.error.reason values kept per tenant; past it, new ones
+	// are stored as "other" (internal/otlp/reasons.go).
+	MaxErrorReasonsPerTenant int `koanf:"max_error_reasons_per_tenant"`
+
 	APIKeyCacheTTL time.Duration `koanf:"api_key_cache_ttl"`
 
 	RateLimitRequestsPerSecond float64 `koanf:"rate_limit_requests_per_second"`
@@ -49,6 +53,7 @@ func publicDefaults() map[string]any {
 		"public.max_attribute_string_value_length": 4096,
 		"public.max_timestamp_skew_past":           defaultDayDuration,
 		"public.max_timestamp_skew_future":         "5m",
+		"public.max_error_reasons_per_tenant":      100,
 
 		"public.api_key_cache_ttl": "60s",
 

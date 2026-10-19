@@ -1,7 +1,10 @@
 package allowlist
 
 import (
+	"fmt"
 	"os"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -221,5 +224,66 @@ func TestSessionFootprintAttributes(t *testing.T) {
 				t.Errorf("cli.command.* span should not allow %s", a)
 			}
 		}
+	}
+}
+
+// The error reason is a basic-tier identifier from a vendor's fixed
+// vocabulary, allowed wherever the coarse error category is.
+func TestErrorReasonAttribute(t *testing.T) {
+	s := loadRealSchema(t)
+	def, ok := s.AttrDefFor("cli.error.reason")
+	if !ok {
+		t.Fatal("cli.error.reason not defined")
+	}
+	basic, _ := s.TierRank("basic")
+	if rank, _ := s.TierRank(def.MinTier); rank != basic || def.Type != AttrString || def.MaxLength != 64 || def.Sensitive {
+		t.Errorf("cli.error.reason = %+v, want basic-tier, non-sensitive string of at most 64", def)
+	}
+
+	m, _ := s.MetricByName("cli.errors")
+	ev, _ := s.LogEventByName("cli.error.raised")
+	for name, allowed := range map[string][]string{"cli.errors": m.AllowedAttributes, "cli.error.raised": ev.AllowedAttributes} {
+		if !slices.Contains(allowed, "cli.error.reason") {
+			t.Errorf("%s should allow cli.error.reason", name)
+		}
+	}
+
+	valid := []string{"no-token", "invalid_url", "config.read-failed", "e404", "0", strings.Repeat("a", 64)}
+	invalid := []string{"", "No-Token", "no token", "-leading-dash", ".hidden", "path/to/x", "naïve", "x\n", strings.Repeat("a", 65)}
+	for _, v := range valid {
+		if err := CheckAttribute(def, v); err != nil {
+			t.Errorf("CheckAttribute(%q) = %v, want nil", v, err)
+		}
+	}
+	for _, v := range invalid {
+		if err := CheckAttribute(def, v); err == nil {
+			t.Errorf("CheckAttribute(%q) = nil, want an error", v)
+		}
+	}
+}
+
+func TestPatternValidatedAtLoad(t *testing.T) {
+	base := `
+schema_version: 1
+consent_tiers: [{name: basic, rank: 0}]
+attributes:
+  a:
+    type: %s
+    pattern: %q
+    min_tier: basic
+`
+	for _, c := range []struct {
+		typ, pattern, wantErr string
+	}{
+		{"int", "^[0-9]+$", "only supported on type string"},
+		{"string", "([", "invalid pattern"},
+	} {
+		_, err := Parse([]byte(fmt.Sprintf(base, c.typ, c.pattern)))
+		if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+			t.Errorf("type %s pattern %q: err = %v, want %q", c.typ, c.pattern, err, c.wantErr)
+		}
+	}
+	if _, err := Parse([]byte(fmt.Sprintf(base, "string", "^[a-z]+$"))); err != nil {
+		t.Errorf("valid pattern: %v", err)
 	}
 }

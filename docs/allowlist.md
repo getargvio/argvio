@@ -36,6 +36,12 @@ attributes:
     type: int
     min_tier: anonymous
     sensitive: false
+  cli.error.reason:
+    type: string
+    max_length: 64
+    pattern: "^[a-z0-9][a-z0-9._-]*$"   # optional, string only; anchor it
+    min_tier: basic
+    sensitive: false
 
 metrics:
   - name: cli.command.invocations
@@ -77,7 +83,7 @@ For each span / log record / metric data point:
 4. **Per-attribute filtering.** For every attribute still on the record:
    dropped (not reject-the-record) if it isn't in this event's
    `allowed_attributes` and isn't a `standard_resource_attributes` entry,
-   fails its `type`/`max_length`/`enum` check
+   fails its `type`/`max_length`/`enum`/`pattern` check
    (`internal/allowlist.CheckAttribute`), or has a `min_tier` above the
    effective tier. A single malformed or over-scoped field degrades the
    record; it doesn't nuke an otherwise-valid one.
@@ -91,9 +97,49 @@ dropped.
 | Tier | Adds |
 |---|---|
 | `anonymous` | Aggregate-only shape: `cli.command.name`, `cli.command.exit_code`, `cli.command.duration_ms`, `cli.version`, `cli.os`, `cli.arch`, `cli.is_ci`. |
-| `basic` | Opaque `cli.session_id`/`cli.install_id` (random UUIDs, not identity-linked), `cli.flag.names` (names only, not values), shell/terminal metadata, the coarse `cli.error.type` category, and process resource usage on the command span (`cli.process.peak_rss_bytes`, `cli.process.cpu_time_ms`), and build footprint on `cli.session.started` (`cli.binary.size_bytes`, `cli.startup.duration_ms`). |
+| `basic` | Opaque `cli.session_id`/`cli.install_id` (random UUIDs, not identity-linked), `cli.flag.names` (names only, not values), shell/terminal metadata, the coarse `cli.error.type` category and the vendor's finer `cli.error.reason` (see below), and process resource usage on the command span (`cli.process.peak_rss_bytes`, `cli.process.cpu_time_ms`), and build footprint on `cli.session.started` (`cli.binary.size_bytes`, `cli.startup.duration_ms`). |
 | `full` | Error diagnostics (`cli.error.message`/`stacktrace`), the full allowlisted attribute set for allowed events. |
 | `optin_plus` | Fields marked `sensitive: true` explicitly: `cli.args.raw`, `cli.env.vars`, `cli.host.name`, `cli.user.name`, `cli.path.raw`. Only accepted if **both** the tenant's ceiling is `optin_plus` and the record itself declares it. |
+
+## Error reasons (`cli.error.reason`)
+
+`cli.error.type` is a coarse category (network, timeout, ...). A vendor with
+its own fixed list of failure causes ("no token", "invalid url", "failed to
+read config file") sends one of them as `cli.error.reason`, on the
+`cli.errors` metric and the `cli.error.raised` event, next to the category.
+It is `basic` tier because it is meant to be an identifier defined in the
+CLI's code, never the error text.
+
+**The SDK does not scrub the value**: it sends whatever the CLI passes. Two
+guards on the server keep a vendor bug (say, putting the error message or
+user input in the field) from leaking free text or blowing up storage:
+
+1. **Format.** The schema `pattern` `^[a-z0-9][a-z0-9._-]*$`, with
+   `max_length: 64`: lowercase letters, digits, `.`, `_` and `-`, starting
+   with a letter or digit. A value that doesn't match is dropped like any
+   other invalid attribute, and the record is kept without it. No spaces,
+   slashes, quotes or uppercase get through, so paths and sentences can't.
+2. **Cardinality.** Each tenant has a vocabulary of at most
+   `public.max_error_reasons_per_tenant` distinct reasons (default 100),
+   kept in the `error_reasons` table. A reason already in it is stored
+   as-is; a new one is admitted while there is room (within a batch, most
+   frequent first, then by name), and otherwise stored as `other`. Folded
+   records are counted per tenant in `error_reason_overflow`
+   (`folded_count`, `last_folded_at`) and logged as a warning. `other` is
+   reserved: always accepted, never counted toward the cap, so a vendor
+   that sends it literally mixes with folded values. Reasons not seen for
+   the tenant's logs retention window are dropped by `argvio retention
+   sweep`, which frees their slots.
+
+The cap is applied in the ingest pipeline after allowlist filtering and
+before the rows are written (`internal/otlp/reasons.go`). Records without
+the attribute (older SDKs) are unaffected.
+
+`GET /v1/metrics/error-types?group_by=reason` breaks each category down by
+reason, per command; without `group_by` the response is unchanged. Like the
+category, it is read from `cli.error.raised` events, so it only counts what
+the SDK sent as events. No continuous aggregate reads the `metrics` table,
+so carrying the reason on `cli.errors` needed no rollup change or backfill.
 
 ## Worked example: adding a new supported log event
 

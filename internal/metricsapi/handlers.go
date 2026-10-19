@@ -86,6 +86,30 @@ func serveBucketed[T any](s *Server, name string, def storage.Bucket, allowed []
 	}
 }
 
+// handleErrorTypes serves /v1/metrics/error-types: per error category by
+// default, or per category and vendor-assigned reason with group_by=reason.
+// The two shapes differ, so each is its own serveBucketed handler.
+func (s *Server) handleErrorTypes() http.HandlerFunc {
+	byType := serveBucketed(s, "error types", storage.BucketHour, anyBucket, s.QB.ErrorTypes)
+	byReason := serveBucketed(s, "error reasons", storage.BucketHour, anyBucket, s.QB.ErrorReasons)
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("group_by") {
+		case "", "type":
+			byType(w, r)
+		case "reason":
+			byReason(w, r)
+		default:
+			writeError(w, http.StatusBadRequest, "invalid_request", "group_by must be type or reason")
+		}
+	}
+}
+
+// errorFingerprints adapts QB.ErrorFingerprints to serveBucketed by
+// supplying the server's tier ranking for the read-time ceiling check.
+func (s *Server) errorFingerprints(ctx context.Context, scope storage.TenantScope, f storage.Filters, bucket storage.Bucket) ([]storage.ErrorFingerprint, error) {
+	return s.QB.ErrorFingerprints(ctx, scope, f, bucket, s.Tiers)
+}
+
 // handleFeatureDiscovery serves /v1/metrics/feature-discovery. It isn't
 // time-bucketed (discovery is measured as time since install, not on the
 // calendar), so it can't use serveBucketed; the optional `kind` param narrows

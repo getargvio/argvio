@@ -18,6 +18,7 @@ type Bounds struct {
 	MaxAttributeStringValueLength int
 	MaxTimestampSkewPast          time.Duration
 	MaxTimestampSkewFuture        time.Duration
+	MaxErrorReasonsPerTenant      int
 }
 
 // checkTimestamp reports whether ts is within [now-past, now+future]. A
