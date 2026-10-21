@@ -97,9 +97,9 @@ it stays small relative to the hypertables.
 - `GET /v1/metrics/funnel`: counts of installs that reached each stage in
   the window.
 - `GET /v1/metrics/activation`: time-to-first-success distribution.
-- `GET /v1/metrics/friction`: per command, rates of help views, abandonment
-  (exit 130), repeated failure of the same command by one install within a
-  short window.
+- `GET /v1/metrics/friction`: per command, rates of help views and
+  abandonment (exit 130). Retries and repeated failure of the same command by
+  one install are in `retries` (section 7).
 - `GET /v1/metrics/error-types`: distribution of `cli.error.type`,
   time-bucketed; `group_by=reason` splits it by the vendor's finer
   `cli.error.reason` (docs/allowlist.md "Error reasons").
@@ -174,6 +174,46 @@ Endpoints, both tenant-scoped and not time-bucketed:
   Single-command sessions outnumber everything else, so `min_length` (1-5)
   sets shorter sequences aside; it applies after the collapsing and the cut.
 
+### 7. Retries and repeated failures
+
+A user retrying a failing command looks, per run, like an independent
+invocation. `GET /v1/metrics/retries` tells them apart from the same raw
+`cli.command.completed` logs as sessions: one `cli.install_id`, one command
+name, runs in time order. A run **failed** when its exit code is non-zero.
+
+- **Window W**: `storage.RetryWindow`, 10 minutes, or `window_seconds` (1 to
+  3600). Every comparison against W is inclusive: a rerun exactly W after a
+  failure is a retry, one a second later is not. The response states W as
+  `window_seconds`.
+- **Retried failure**: the install's next run of the same command is at most W
+  after the failure, whatever its outcome. Other commands in between don't
+  matter, and one command's runs never affect another's.
+- **Retry sequence**: a failure and the runs after it, each within W of a
+  failed run before it. A success ends the sequence, as does a gap over W or
+  the end of the data. A sequence of two or more runs is counted in
+  `retry_sequences`; it **recovered** if it ended in a success. A failure
+  with no rerun within W is a one-run sequence: failed, not retried.
+- **Failure streak**: the failures in one sequence. `longest_failure_streak`
+  is the largest per command. Streaks chain, so failures 8 minutes apart make
+  a streak of 4 over 24 minutes.
+- **Repeated failure**: an install with `storage.RepeatedFailureCount` (3)
+  consecutive failures of the command whose first and last lie within W,
+  counted in `repeated_failure_installs`. This is stricter than a streak of
+  3: the example above is a streak of 4 but not a repeated failure.
+- **Out of scope**: "variations" (the same command with different flags).
+  `cli.command.completed` has no flag names; `cli.command.invoked` has them
+  but no exit code, so it would take a join on `cli.session_id`.
+- **Who is seen, retention, filters**: as for sessions. Anonymous-tier
+  failures have no install id and are invisible (see `install-coverage`); a
+  completion without an exit code is skipped. The `command`, `cli_version`,
+  `os`, `arch` and `is_ci` filters pick the runs sequences are built from, so
+  a filter that drops some runs can hide a retry. `exit_code` and `attr.*`
+  don't apply.
+- **Response**: not time-bucketed; `data` holds `window_seconds`,
+  `repeated_failure_count` and `commands`, one row per command with at least
+  one failure, most failures first (`limit`/`offset` page them).
+  `retry_rate` is `retried_count / failed_count`.
+
 ## Decisions (agreed)
 
 1. **Retention vs `installs`**: purge rows by `last_seen` against the
@@ -203,8 +243,8 @@ Steps 1 and 2 are independent and can be built in parallel.
 ## Progress
 
 - Step 1 (partial): `/v1/metrics/error-types` and `/v1/metrics/friction`
-  (help views, interrupted runs) are implemented. Repeated failure of the same command by one install is
-  not in `friction` yet; it needs `install_id` on command outcomes (step 2).
+  (help views, interrupted runs) are implemented. Repeated failure of the same
+  command by one install is in `/v1/metrics/retries` (section 7).
 - Step 2 (done, unreleased): allowlist and both SDKs.
   - `cli.error.type` is now `basic` tier, and both SDKs emit
     `cli.error.raised` at `basic`+ (previously `full`+).
@@ -240,10 +280,10 @@ Steps 1 and 2 are independent and can be built in parallel.
     install's latest values; `command` and `is_ci` don't apply (installs
     carry neither). Recent cohorts are still maturing, so later stages are
     counted whenever they happened.
-  - Not done: the "repeated failure of the same command by one install"
-    friction signal, which needs a per-install command history that the
-    installs table doesn't keep. Doing it from raw `cli.command.completed`
-    logs (bounded by log retention) is the likely route.
+  - The "repeated failure of the same command by one install" signal needs a
+    per-install command history that the installs table doesn't keep. It is
+    derived from raw `cli.command.completed` logs (bounded by log retention)
+    in `/v1/metrics/retries`.
 - Follow-up (done, unreleased): two more endpoints over install state:
   - `GET /v1/metrics/install-methods`: installs per first-seen bucket by
     vendor-reported install method (null when never reported).

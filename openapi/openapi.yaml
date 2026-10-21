@@ -1698,6 +1698,80 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /v1/metrics/retries:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
+    get:
+      summary: Retried and repeatedly failing commands
+      description: >
+        Per command, how often a failed run was retried and how many installs
+        keep failing it. A run is a cli.command.completed; it failed when its
+        exit code is non-zero. A failure was retried when the same install ran
+        the same command again at most window_seconds after it (inclusive),
+        whatever the outcome of that run. A retry sequence is a failure and the
+        runs that follow, each within the window of a failed run before it; a
+        success ends it. It recovered when it ends in a success.
+        longest_failure_streak is the most failures in one such sequence by one
+        install. An install failed repeatedly when 3 of its consecutive
+        failures of the command lie within the window, first to last
+        (repeated_failure_count in the response). Only commands with a failure
+        are listed, most failures first; limit and offset page them. Only
+        events that carry a cli.install_id (basic consent tier or above) and
+        an exit code are seen, so anonymous-tier failures are invisible (see
+        /v1/metrics/install-coverage), and runs are read from raw logs, so
+        results are bounded by log retention. The command, cli_version, os,
+        arch and is_ci filters select the runs sequences are built from, so a
+        filter can hide a retry; exit_code and attr filters do not apply.
+      operationId: retries
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Command"
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/IsCI"
+        - name: window_seconds
+          in: query
+          required: false
+          description: How soon after a failure a rerun of the command counts as a retry.
+          schema: { type: integer, minimum: 1, maximum: 3600, default: 600 }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: The window used and one row per command with failures.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Retries"
+              example:
+                data:
+                  window_seconds: 600
+                  repeated_failure_count: 3
+                  commands:
+                    - command_name: deploy
+                      failed_count: 240
+                      retried_count: 96
+                      retry_rate: 0.4
+                      retry_sequences: 88
+                      recovered_sequences: 61
+                      repeated_failure_installs: 7
+                      longest_failure_streak: 9
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /v1/metrics/ci-split:
     parameters:
       - $ref: "#/components/parameters/TenantHeader"
@@ -2451,6 +2525,30 @@ components:
           description: Commands in the order they ran, repeats collapsed, at most 5
         sessions: { type: integer, description: Sessions with this sequence }
       required: [commands, sessions]
+
+    RetryPoint:
+      type: object
+      properties:
+        command_name: { type: string, nullable: true }
+        failed_count: { type: integer, description: Completions with a non-zero exit code }
+        retried_count: { type: integer, description: Failures followed by another run of the command by the same install within the window }
+        retry_rate: { type: number, description: retried_count / failed_count }
+        retry_sequences: { type: integer, description: Failures together with the retries that follow them }
+        recovered_sequences: { type: integer, description: Retry sequences that ended in a success }
+        repeated_failure_installs: { type: integer, description: Installs with repeated_failure_count failures of the command within the window }
+        longest_failure_streak: { type: integer, description: Most failures in a row of the command by one install, each within the window of the one before }
+      required: [command_name, failed_count, retried_count, retry_rate, retry_sequences, recovered_sequences, repeated_failure_installs, longest_failure_streak]
+
+    Retries:
+      type: object
+      properties:
+        window_seconds: { type: number, description: The retry window used }
+        repeated_failure_count: { type: integer, description: Failures within the window that make a repeated failure (3) }
+        commands:
+          type: array
+          items:
+            $ref: "#/components/schemas/RetryPoint"
+      required: [window_seconds, repeated_failure_count, commands]
 
     CISplitPoint:
       type: object
