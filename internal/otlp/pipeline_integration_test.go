@@ -34,6 +34,8 @@ func testBounds() Bounds {
 		MaxErrorReasonsPerTenant:      100,
 		MaxCounterNamesPerTenant:      200,
 		MaxCounterLabelsPerName:       50,
+		MaxMeasureNamesPerTenant:      100,
+		MaxMeasureLabelsPerName:       50,
 	}
 }
 
@@ -689,6 +691,149 @@ FROM metrics WHERE tenant_id = $1 AND metric_name = 'cli.counter'`, tenantID)
 	var foldedNames, foldedLabels int64
 	if err := pool.QueryRow(ctx, `SELECT folded_names, folded_labels FROM counter_overflow WHERE tenant_id = $1`, tenantID).Scan(&foldedNames, &foldedLabels); err != nil || foldedNames != 1 || foldedLabels != 1 {
 		t.Errorf("overflow = names %d labels %d (err %v), want 1 and 1", foldedNames, foldedLabels, err)
+	}
+}
+
+func TestProcessMetrics_Measure_Live(t *testing.T) {
+	pipeline, pool, tenantID := setupPipeline(t, "basic", consent.ModeStrip)
+	pipeline.Bounds.MaxMeasureNamesPerTenant = 2
+	pipeline.Bounds.MaxMeasureLabelsPerName = 1
+	ctx := context.Background()
+	now := time.Now()
+	bounds := []float64{1, 5, 10, 50, 100, 500, 1000, 5000, 10000, 60000, 300000}
+
+	md := pmetric.NewMetrics()
+	rm := md.ResourceMetrics().AppendEmpty()
+	// Anonymous: measures are reported without any install id.
+	rm.Resource().Attributes().PutStr("cli.analytics.tier", "anonymous")
+	metrics := rm.ScopeMetrics().AppendEmpty().Metrics()
+	newMeasure := func(unit string, temporality pmetric.AggregationTemporality) pmetric.Metric {
+		m := metrics.AppendEmpty()
+		m.SetName("cli.measure")
+		m.SetUnit(unit)
+		m.SetEmptyHistogram().SetAggregationTemporality(temporality)
+		return m
+	}
+	// Each point is labelled by its cli.version so it can be found again.
+	// counts has one entry per bucket; sum, min and max follow from them
+	// unless sum is overridden.
+	type pt struct {
+		version, name, label string
+		counts               []uint64
+		sum                  float64
+		bounds               []float64
+	}
+	add := func(m pmetric.Metric, p pt) {
+		dp := m.Histogram().DataPoints().AppendEmpty()
+		dp.SetTimestamp(pcommon.NewTimestampFromTime(now))
+		var total uint64
+		for _, c := range p.counts {
+			total += c
+		}
+		dp.SetCount(total)
+		dp.SetSum(p.sum)
+		dp.SetMin(p.sum / float64(max(total, 1)))
+		dp.SetMax(p.sum)
+		if p.bounds == nil {
+			p.bounds = bounds
+		}
+		dp.ExplicitBounds().FromRaw(p.bounds)
+		dp.BucketCounts().FromRaw(p.counts)
+		dp.Attributes().PutStr("cli.version", p.version)
+		if p.name != "" {
+			dp.Attributes().PutStr("cli.measure.name", p.name)
+		}
+		if p.label != "" {
+			dp.Attributes().PutStr("cli.measure.label", p.label)
+		}
+	}
+	fast := []uint64{0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0} // two runs in (100, 500]
+	delta := newMeasure("ms", pmetric.AggregationTemporalityDelta)
+	add(delta, pt{version: "kept", name: "john.run", label: "hmac", counts: fast, sum: 600})
+	add(delta, pt{version: "kept-again", name: "john.run", label: "hmac", counts: fast, sum: 700})
+	// Cap of one label per name: "hmac" is more frequent, "md5" folds.
+	add(delta, pt{version: "label-folded", name: "john.run", label: "md5", counts: fast, sum: 800})
+	add(delta, pt{version: "no-label", name: "scan", counts: fast, sum: 900})
+	// Cap of two names, both taken above: a third folds, label and all.
+	add(delta, pt{version: "name-folded", name: "probe", label: "tcp", counts: fast, sum: 100})
+	add(delta, pt{version: "bad-label", name: "scan", label: "Not A Label", counts: fast, sum: 300})
+	add(delta, pt{version: "no-name", counts: fast, sum: 300})
+	add(delta, pt{version: "bad-name", name: "/home/alice", counts: fast, sum: 300})
+	// Buckets other than the server's cannot be added to the others'.
+	add(delta, pt{version: "other-bounds", name: "scan", counts: []uint64{1, 1, 0}, sum: 3, bounds: []float64{10, 100}})
+	// Counts that do not add up, or a negative duration.
+	bad := pt{version: "inconsistent", name: "scan", counts: fast, sum: 600}
+	add(delta, bad)
+	delta.Histogram().DataPoints().At(delta.Histogram().DataPoints().Len() - 1).SetCount(5)
+	add(delta, pt{version: "negative", name: "scan", counts: fast, sum: -600})
+	// Cumulative histograms would be double counted when added, seconds are
+	// not milliseconds: the whole metric is rejected.
+	add(newMeasure("ms", pmetric.AggregationTemporalityCumulative), pt{version: "cumulative", name: "scan", counts: fast, sum: 600})
+	add(newMeasure("s", pmetric.AggregationTemporalityDelta), pt{version: "seconds", name: "scan", counts: fast, sum: 600})
+	// And so is a measure sent as another kind of metric.
+	asSum := metrics.AppendEmpty()
+	asSum.SetName("cli.measure")
+	asSum.SetUnit("ms")
+	asSum.SetEmptySum().SetAggregationTemporality(pmetric.AggregationTemporalityDelta)
+	sdp := asSum.Sum().DataPoints().AppendEmpty()
+	sdp.SetTimestamp(pcommon.NewTimestampFromTime(now))
+	sdp.SetIntValue(5)
+	sdp.Attributes().PutStr("cli.measure.name", "scan")
+	sdp.Attributes().PutStr("cli.version", "as-sum")
+
+	accepted, rejected, sample, err := pipeline.ProcessMetrics(ctx, md)
+	if err != nil || accepted != 6 || rejected != 8 {
+		t.Fatalf("ProcessMetrics: accepted=%d rejected=%d sample=%q err=%v, want 6/8", accepted, rejected, sample, err)
+	}
+
+	type stored struct {
+		name, label, tier string
+		count             int64
+		sum               float64
+		buckets           int
+	}
+	rows, err := pool.Query(ctx, `
+SELECT cli_version, datapoint_attributes ->> 'cli.measure.name', coalesce(datapoint_attributes ->> 'cli.measure.label', ''),
+       consent_tier, histogram_count, histogram_sum, cardinality(histogram_bucket_counts)
+FROM metrics WHERE tenant_id = $1 AND metric_name = 'cli.measure'`, tenantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]stored{}
+	for rows.Next() {
+		var version string
+		var s stored
+		if err := rows.Scan(&version, &s.name, &s.label, &s.tier, &s.count, &s.sum, &s.buckets); err != nil {
+			t.Fatal(err)
+		}
+		got[version] = s
+	}
+	rows.Close()
+	want := map[string]stored{
+		"kept":         {"john.run", "hmac", "anonymous", 2, 600, 12},
+		"kept-again":   {"john.run", "hmac", "anonymous", 2, 700, 12},
+		"label-folded": {"john.run", "other", "anonymous", 2, 800, 12},
+		"no-label":     {"scan", "", "anonymous", 2, 900, 12},
+		"name-folded":  {"other", "", "anonymous", 2, 100, 12},
+		"bad-label":    {"scan", "", "anonymous", 2, 300, 12},
+	}
+	if len(got) != len(want) {
+		t.Errorf("stored %d measure points, want %d: %+v", len(got), len(want), got)
+	}
+	for version, w := range want {
+		if got[version] != w {
+			t.Errorf("%s: stored %+v, want %+v", version, got[version], w)
+		}
+	}
+
+	var foldedNames, foldedLabels int64
+	if err := pool.QueryRow(ctx, `SELECT folded_names, folded_labels FROM measure_overflow WHERE tenant_id = $1`, tenantID).Scan(&foldedNames, &foldedLabels); err != nil || foldedNames != 1 || foldedLabels != 1 {
+		t.Errorf("overflow = names %d labels %d (err %v), want 1 and 1", foldedNames, foldedLabels, err)
+	}
+	// Measures have their own vocabulary: counters are untouched.
+	var counters int64
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM counter_names WHERE tenant_id = $1`, tenantID).Scan(&counters); err != nil || counters != 0 {
+		t.Errorf("counter_names = %d (err %v), want 0", counters, err)
 	}
 }
 

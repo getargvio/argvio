@@ -21,6 +21,8 @@ type Bounds struct {
 	MaxErrorReasonsPerTenant      int
 	MaxCounterNamesPerTenant      int
 	MaxCounterLabelsPerName       int
+	MaxMeasureNamesPerTenant      int
+	MaxMeasureLabelsPerName       int
 }
 
 // checkTimestamp reports whether ts is within [now-past, now+future]. A

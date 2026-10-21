@@ -69,6 +69,9 @@ func (r Root) ValidatePublic() error {
 	if r.Public.MaxCounterNamesPerTenant <= 0 || r.Public.MaxCounterLabelsPerName <= 0 {
 		errs = append(errs, "public.max_counter_names_per_tenant and max_counter_labels_per_name must be > 0")
 	}
+	if r.Public.MaxMeasureNamesPerTenant <= 0 || r.Public.MaxMeasureLabelsPerName <= 0 {
+		errs = append(errs, "public.max_measure_names_per_tenant and max_measure_labels_per_name must be > 0")
+	}
 	if r.Public.APIKeyCacheTTL <= 0 {
 		errs = append(errs, "public.api_key_cache_ttl must be > 0")
 	}

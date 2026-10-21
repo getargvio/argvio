@@ -352,7 +352,7 @@ metrics:
 	for _, c := range []struct {
 		typ, temporality, required, wantErr string
 	}{
-		{"gauge", "delta", "a", "temporality is only supported on type sum"},
+		{"gauge", "delta", "a", "temporality is only supported on types sum and histogram"},
 		{"sum", "sometimes", "a", "unknown temporality"},
 		{"sum", "delta", "b", `required attribute "b" is not in allowed_attributes`},
 	} {
@@ -362,6 +362,88 @@ metrics:
 		}
 	}
 	if _, err := Parse([]byte(fmt.Sprintf(base, "sum", "cumulative", "a"))); err != nil {
+		t.Errorf("valid metric: %v", err)
+	}
+}
+
+// Vendor measures are counters' counterpart for durations: the same
+// anonymous-tier name and label, in a histogram whose buckets are fixed.
+func TestMeasureMetric(t *testing.T) {
+	s := loadRealSchema(t)
+	m, ok := s.MetricByName("cli.measure")
+	if !ok {
+		t.Fatal("cli.measure not defined")
+	}
+	if m.Type != "histogram" || m.Unit != "ms" || m.Temporality != TemporalityDelta {
+		t.Errorf("cli.measure = %+v, want a delta histogram in ms", m)
+	}
+	wantBounds := []float64{1, 5, 10, 50, 100, 500, 1000, 5000, 10000, 60000, 300000}
+	if !slices.Equal(m.ExplicitBounds, wantBounds) {
+		t.Errorf("explicit bounds = %v, want %v", m.ExplicitBounds, wantBounds)
+	}
+	if !slices.Equal(m.RequiredAttributes, []string{"cli.measure.name"}) {
+		t.Errorf("required attributes = %v, want cli.measure.name", m.RequiredAttributes)
+	}
+	for _, k := range []string{"cli.measure.name", "cli.measure.label", "cli.command.name", "cli.version", "cli.os", "cli.arch", "cli.is_ci"} {
+		if !slices.Contains(m.AllowedAttributes, k) {
+			t.Errorf("cli.measure should allow %s", k)
+		}
+	}
+	if slices.Contains(m.AllowedAttributes, "cli.install_id") || slices.Contains(m.AllowedAttributes, "cli.session_id") {
+		t.Error("cli.measure must not carry install or session ids")
+	}
+
+	anonymous, _ := s.TierRank("anonymous")
+	valid := []string{"john.run", "scan_duration", "hmac-sha256", "0", strings.Repeat("a", 64)}
+	invalid := []string{"", "John", "two words", "-x", ".x", "/etc/passwd", "https://example.com", "a=b", "naïve", "x\n", strings.Repeat("a", 65)}
+	for _, key := range []string{"cli.measure.name", "cli.measure.label"} {
+		def, ok := s.AttrDefFor(key)
+		if !ok {
+			t.Fatalf("%s not defined", key)
+		}
+		if rank, _ := s.TierRank(def.MinTier); rank != anonymous || def.Type != AttrString || def.MaxLength != 64 || def.Sensitive {
+			t.Errorf("%s = %+v, want anonymous-tier, non-sensitive string of at most 64", key, def)
+		}
+		for _, v := range valid {
+			if err := CheckAttribute(def, v); err != nil {
+				t.Errorf("%s: CheckAttribute(%q) = %v, want nil", key, v, err)
+			}
+		}
+		for _, v := range invalid {
+			if err := CheckAttribute(def, v); err == nil {
+				t.Errorf("%s: CheckAttribute(%q) = nil, want an error", key, v)
+			}
+		}
+	}
+}
+
+func TestExplicitBoundsValidatedAtLoad(t *testing.T) {
+	base := `
+schema_version: 1
+consent_tiers: [{name: basic, rank: 0}]
+attributes:
+  a: {type: string, min_tier: basic}
+metrics:
+  - name: m
+    type: %s
+    explicit_bounds: %s
+    allowed_attributes: [a]
+`
+	for _, c := range []struct {
+		typ, bounds, wantErr string
+	}{
+		{"sum", "[1, 2]", "explicit_bounds is only supported on type histogram"},
+		{"histogram", "[1, 1]", "strictly increasing"},
+		{"histogram", "[5, 1]", "strictly increasing"},
+		{"histogram", "[.inf]", "finite"},
+		{"histogram", "[.nan]", "finite"},
+	} {
+		_, err := Parse([]byte(fmt.Sprintf(base, c.typ, c.bounds)))
+		if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+			t.Errorf("%+v: err = %v, want %q", c, err, c.wantErr)
+		}
+	}
+	if _, err := Parse([]byte(fmt.Sprintf(base, "histogram", "[1, 5, 10]"))); err != nil {
 		t.Errorf("valid metric: %v", err)
 	}
 }

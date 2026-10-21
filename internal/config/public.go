@@ -27,6 +27,10 @@ type PublicConfig struct {
 	// as "other" (internal/otlp/counters.go).
 	MaxCounterNamesPerTenant int `koanf:"max_counter_names_per_tenant"`
 	MaxCounterLabelsPerName  int `koanf:"max_counter_labels_per_name"`
+	// The same for cli.measure.name and cli.measure.label
+	// (internal/otlp/measures.go).
+	MaxMeasureNamesPerTenant int `koanf:"max_measure_names_per_tenant"`
+	MaxMeasureLabelsPerName  int `koanf:"max_measure_labels_per_name"`
 
 	APIKeyCacheTTL time.Duration `koanf:"api_key_cache_ttl"`
 
@@ -61,6 +65,8 @@ func publicDefaults() map[string]any {
 		"public.max_error_reasons_per_tenant":      100,
 		"public.max_counter_names_per_tenant":      200,
 		"public.max_counter_labels_per_name":       50,
+		"public.max_measure_names_per_tenant":      100,
+		"public.max_measure_labels_per_name":       50,
 
 		"public.api_key_cache_ttl": "60s",
 

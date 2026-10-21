@@ -15,7 +15,7 @@ import (
 const ErrorReasonOther = "other"
 
 // vocabularyTouchInterval is how stale a capped vocabulary's last_seen
-// (error_reasons, counter_names, counter_labels) may get before ingest moves
+// (error_reasons, counter_names, counter_labels, measure_names, measure_labels) may get before ingest moves
 // it forward; finer precision isn't needed to age values out on a retention
 // window measured in days.
 const vocabularyTouchInterval = 24 * time.Hour

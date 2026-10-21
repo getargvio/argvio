@@ -84,6 +84,12 @@ func (p *Pipeline) ProcessMetrics(ctx context.Context, md pmetric.Metrics) (acce
 					dps := metric.Histogram().DataPoints()
 					for d := 0; d < dps.Len(); d++ {
 						dp := dps.At(d)
+						if reason := checkHistogramPoint(metricDef, dp); reason != "" {
+							rejected++
+							rejectionSample = reason
+							p.Log.Warn("otlp: histogram data point rejected", "reason", reason, "metric_name", metric.Name())
+							continue
+						}
 						row, ok := p.processHistogramDataPoint(resource, scope, metric, dp, def, now, &rejected, &rejectionSample)
 						if ok {
 							rows = append(rows, row)
@@ -111,6 +117,9 @@ func (p *Pipeline) ProcessMetrics(ctx context.Context, md pmetric.Metrics) (acce
 		if err := p.capCounters(ctx, rows); err != nil {
 			return 0, int64(md.DataPointCount()), "", err
 		}
+		if err := p.capMeasures(ctx, rows); err != nil {
+			return 0, int64(md.DataPointCount()), "", err
+		}
 		if _, werr := p.Writer.InsertMetrics(ctx, rows); werr != nil {
 			return 0, int64(md.DataPointCount()), "", werr
 		}
@@ -119,23 +128,78 @@ func (p *Pipeline) ProcessMetrics(ctx context.Context, md pmetric.Metrics) (acce
 }
 
 // checkMetricShape returns why metric as a whole doesn't match the shape its
-// allowlist entry declares, or "" if it does. Only a declared temporality is
-// checked: it is what makes summing a metric's data points meaningful.
+// allowlist entry declares, or "" if it does. Only a declared temporality (and
+// the unit of a metric with explicit_bounds) is checked: that is what makes
+// adding a metric's data points meaningful.
 func checkMetricShape(def allowlist.MetricDef, metric pmetric.Metric) string {
+	if len(def.ExplicitBounds) > 0 && metric.Unit() != def.Unit {
+		// The fixed bounds only mean something in the declared unit.
+		return fmt.Sprintf("metric %s requires unit %q, got %q", def.Name, def.Unit, metric.Unit())
+	}
 	if def.Temporality == "" {
 		return ""
-	}
-	if metric.Type() != pmetric.MetricTypeSum {
-		return fmt.Sprintf("metric %s must be a sum", def.Name)
 	}
 	want := pmetric.AggregationTemporalityDelta
 	if def.Temporality == allowlist.TemporalityCumulative {
 		want = pmetric.AggregationTemporalityCumulative
 	}
-	if got := metric.Sum().AggregationTemporality(); got != want {
+	var got pmetric.AggregationTemporality
+	switch {
+	case def.Type == "sum" && metric.Type() == pmetric.MetricTypeSum:
+		got = metric.Sum().AggregationTemporality()
+	case def.Type == "histogram" && metric.Type() == pmetric.MetricTypeHistogram:
+		got = metric.Histogram().AggregationTemporality()
+	default:
+		return fmt.Sprintf("metric %s must be a %s", def.Name, def.Type)
+	}
+	if got != want {
 		return fmt.Sprintf("metric %s requires %s temporality, got %s", def.Name, def.Temporality, got)
 	}
 	return ""
+}
+
+// checkHistogramPoint returns why a histogram data point can't be stored for a
+// metric that declares explicit_bounds, or "" if it can (always, for a metric
+// that doesn't). Its buckets must be exactly the declared ones, so that the
+// counts of different points add up; its counts must be consistent with each
+// other; and, as the metrics so declared measure durations, no value may be
+// negative or not finite.
+func checkHistogramPoint(def allowlist.MetricDef, dp pmetric.HistogramDataPoint) string {
+	if len(def.ExplicitBounds) == 0 {
+		return ""
+	}
+	bounds := dp.ExplicitBounds()
+	if bounds.Len() != len(def.ExplicitBounds) {
+		return fmt.Sprintf("histogram %s must use bucket bounds %v", def.Name, def.ExplicitBounds)
+	}
+	for i, b := range def.ExplicitBounds {
+		if bounds.At(i) != b {
+			return fmt.Sprintf("histogram %s must use bucket bounds %v", def.Name, def.ExplicitBounds)
+		}
+	}
+	counts := dp.BucketCounts()
+	if counts.Len() != len(def.ExplicitBounds)+1 {
+		return fmt.Sprintf("histogram %s must have %d bucket counts", def.Name, len(def.ExplicitBounds)+1)
+	}
+	var total uint64
+	for i := 0; i < counts.Len(); i++ {
+		c := counts.At(i)
+		if total+c < total {
+			return "histogram bucket counts overflow"
+		}
+		total += c
+	}
+	if total != dp.Count() {
+		return "histogram count must equal the sum of its bucket counts"
+	}
+	if dp.HasSum() && !validDuration(dp.Sum()) || dp.HasMin() && !validDuration(dp.Min()) || dp.HasMax() && !validDuration(dp.Max()) {
+		return "histogram sum, min and max must be finite and non-negative"
+	}
+	return ""
+}
+
+func validDuration(v float64) bool {
+	return v >= 0 && !math.IsInf(v, 1)
 }
 
 // validMonotonicValue reports whether a monotonic sum's data point could

@@ -624,6 +624,91 @@ func TestMetricsAPI_EndToEnd_Live(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("measures list and series, tenant scoped", func(t *testing.T) {
+		at := now.Add(-2 * time.Hour)
+		var points []storage.MetricRow
+		add := func(id uuid.UUID, name, label string, bucket int, runs int64, ms float64) {
+			attrs := storage.Attrs{"cli.measure.name": name}
+			if label != "" {
+				attrs["cli.measure.label"] = label
+			}
+			counts := make([]int64, storage.MeasureBucketCount)
+			counts[bucket] = runs
+			points = append(points, storage.MetricRow{
+				Time: at, TenantID: id, MetricName: "cli.measure", MetricType: "histogram", Unit: strp("ms"),
+				HistogramCount: &runs, HistogramSum: &ms, HistogramBucketBounds: storage.MeasureBounds, HistogramBucketCounts: counts,
+				CommandName: strp("crack"), ConsentTier: "anonymous", DatapointAttributes: attrs,
+			})
+		}
+		add(tenantID, "john.run", "hmac", 5, 8, 2400) // (100, 500]
+		add(tenantID, "john.run", "md5", 8, 2, 14000) // (5000, 10000]
+		add(tenantID, "scan.duration", "", 3, 4, 120) // (10, 50]
+		add(otherTenantID, "john.run", "hmac", 5, 50, 15000)
+		add(otherTenantID, "leaked", "", 0, 9, 4)
+		if _, err := w.InsertMetrics(ctx, points); err != nil {
+			t.Fatalf("insert measures: %v", err)
+		}
+		for _, cagg := range []string{"cagg_measures_hourly", "cagg_measures_daily"} {
+			if _, err := pool.Exec(ctx, `CALL refresh_continuous_aggregate($1, NULL, NULL)`, cagg); err != nil {
+				t.Fatalf("refresh %s: %v", cagg, err)
+			}
+		}
+		query := "/v1/metrics/measures?from=" + url.QueryEscape(fromParam)
+
+		resp := get(t, query)
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("list: status = %d, want 200", resp.StatusCode)
+		}
+		var list struct {
+			Data storage.MeasureList `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		ms := list.Data.Measures
+		if len(ms) != 2 || ms[0].Name != "john.run" || ms[0].Count != 10 || ms[0].LabelCount != 2 || ms[1].Name != "scan.duration" || ms[1].Count != 4 {
+			t.Fatalf("list = %+v, want this tenant's john.run (10 runs, 2 labels) then scan.duration (4)", ms)
+		}
+		if ms[0].P50 == nil || *ms[0].P50 < 100 || *ms[0].P50 > 500 || ms[0].P99 == nil || *ms[0].P99 < 5000 {
+			t.Errorf("john.run p50/p99 = %v/%v, want p50 in (100,500] and p99 above 5000", ms[0].P50, ms[0].P99)
+		}
+
+		resp = get(t, query+"&name=john.run&bucket=day")
+		defer resp.Body.Close()
+		var detail struct {
+			Data storage.MeasureDetail `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		var runs int64
+		for _, p := range detail.Data.Series {
+			runs += p.Count
+		}
+		if runs != 10 || len(detail.Data.Labels) != 2 || *detail.Data.Labels[0].Label != "hmac" || detail.Data.Labels[0].Count != 8 {
+			t.Errorf("series = %+v, want 10 runs in total, hmac (8) then md5", detail.Data)
+		}
+
+		resp = get(t, query+"&name=leaked")
+		defer resp.Body.Close()
+		detail.Data = storage.MeasureDetail{}
+		if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(detail.Data.Series) != 0 || len(detail.Data.Labels) != 0 {
+			t.Errorf("another tenant's measure leaked: %+v", detail.Data)
+		}
+
+		for _, bad := range []string{"&label=hmac", "&name=john.run&bucket=minute"} {
+			resp = get(t, query+bad)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Errorf("%s: status = %d, want 400", bad, resp.StatusCode)
+			}
+		}
+	})
 }
 
 // TestMetricsAPI_OIDC_Live runs the whole path against a real Postgres: a

@@ -45,8 +45,9 @@ consent_tiers:
     description: >
       No identifiers beyond what the API key itself implies. Aggregate-only
       shape: command name, exit code, duration, environment class, and
-      vendor counters (cli.counter), whose names and labels must be fixed
-      identifiers from the CLI's code, never user input.
+      vendor counters (cli.counter) and durations (cli.measure), whose names
+      and labels must be fixed identifiers from the CLI's code, never user
+      input.
   - name: basic
     rank: 1
     description: >
@@ -289,6 +290,35 @@ attributes:
       public.max_counter_labels_per_name distinct labels per counter, new
       ones are stored as "other".
 
+  # Vendor-defined durations (cli.measure). Same warning as cli.counter: the
+  # anonymous tier, so reported from CI and with no install identifier. Name
+  # and label must be fixed identifiers chosen in the CLI's code, never user
+  # input, file paths, host names, URLs, tokens or anything derived from them
+  # (docs/allowlist.md "Vendor measures").
+  cli.measure.name:
+    type: string
+    max_length: 64
+    pattern: "^[a-z0-9][a-z0-9._-]*$"
+    min_tier: anonymous
+    sensitive: false
+    description: >
+      Which vendor duration a cli.measure data point records, e.g.
+      "john.run". A fixed identifier from the CLI's code, never user input.
+      Past public.max_measure_names_per_tenant distinct names per tenant, new
+      ones are stored as "other".
+
+  cli.measure.label:
+    type: string
+    max_length: 64
+    pattern: "^[a-z0-9][a-z0-9._-]*$"
+    min_tier: anonymous
+    sensitive: false
+    description: >
+      Optional breakdown of a cli.measure, e.g. "hmac-sha256" for the format
+      being cracked. Same rules as cli.measure.name; past
+      public.max_measure_labels_per_name distinct labels per measure, new
+      ones are stored as "other".
+
   cli.args.raw:
     type: string
     max_length: 4096
@@ -377,6 +407,27 @@ metrics:
     allowed_attributes:
       - cli.counter.name
       - cli.counter.label
+      - cli.command.name
+      - cli.version
+      - cli.os
+      - cli.arch
+      - cli.is_ci
+
+  # One generic duration histogram for vendor-specific timings, so a new one
+  # needs no server change. Delta temporality only, and exactly these bucket
+  # bounds (ms) so every SDK's buckets add up; the percentile code and
+  # cagg_measures_* (migration 0014) assume them. A point without a valid
+  # cli.measure.name is rejected.
+  - name: cli.measure
+    type: histogram
+    unit: ms
+    temporality: delta
+    explicit_bounds: [1, 5, 10, 50, 100, 500, 1000, 5000, 10000, 60000, 300000]
+    required_attributes:
+      - cli.measure.name
+    allowed_attributes:
+      - cli.measure.name
+      - cli.measure.label
       - cli.command.name
       - cli.version
       - cli.os
