@@ -62,6 +62,8 @@ func (s *Server) router() http.Handler {
 		r.Get("/v1/metrics/ci-split", serveBucketed(s, "ci split", storage.BucketHour, anyBucket, s.QB.CISplit))
 		r.Get("/v1/metrics/cohorts", serveBucketed(s, "cohorts", storage.BucketDay, dailyBucket, s.QB.SessionCohort))
 		r.Get("/v1/metrics/active-installs", serveBucketed(s, "active installs", storage.BucketDay, dailyBucket, s.QB.ActiveInstalls))
+		r.Get("/v1/metrics/session-length", s.handleSessionLengths)
+		r.Get("/v1/metrics/session-sequences", s.handleSessionSequences)
 		r.Get("/v1/metrics/retention", serveBucketed(s, "retention", storage.BucketWeek, dailyBucket, s.QB.Retention))
 	})
 
