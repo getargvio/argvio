@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/getargvio/argvio/internal/storage"
 )
@@ -253,6 +254,44 @@ func (s *Server) handleSessionSequences(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{responseDataKey: seqs})
+}
+
+// handleRetries serves /v1/metrics/retries. The optional `window_seconds`
+// param sets how soon after a failure a rerun counts as a retry.
+func (s *Server) handleRetries(w http.ResponseWriter, r *http.Request) {
+	scope, ok := scopeFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "missing tenant scope")
+		return
+	}
+	f, err := s.parseFilters(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	window := storage.RetryWindow
+	if v := r.URL.Query().Get("window_seconds"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || time.Duration(n)*time.Second > storage.MaxRetryWindow {
+			writeError(w, http.StatusBadRequest, "invalid_request",
+				fmt.Sprintf("window_seconds must be an integer from 1 to %d", int(storage.MaxRetryWindow.Seconds())))
+			return
+		}
+		window = time.Duration(n) * time.Second
+	}
+	ctx, cancel := s.withQuery(r.Context())
+	defer cancel()
+	points, err := s.QB.Retries(ctx, scope, f, window)
+	if err != nil {
+		s.Log.Error("metricsapi: retries failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{responseDataKey: map[string]any{
+		"window_seconds":         window.Seconds(),
+		"repeated_failure_count": storage.RepeatedFailureCount,
+		"commands":               points,
+	}})
 }
 
 // handleVersionFootprint serves /v1/metrics/version-footprint. It isn't
