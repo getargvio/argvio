@@ -124,6 +124,56 @@ can only slice charts if it is promoted to a rollup dimension. Plan: add
 `install_method` as a column on `installs` and join it into the new
 endpoints; decide separately whether to generalize.
 
+### 6. Sessions
+
+A process is rarely a useful session (see "What the code already does"), so a
+**session** here is a burst of `cli.command.completed` events from one
+`cli.install_id`. A gap of **more than 30 minutes** (`storage.SessionGap`)
+between two consecutive events of that install starts a new session; a gap of
+exactly 30 minutes does not. The gap is a constant, not a query parameter, and
+every response states it as `gap_seconds`.
+
+- **Length** is the last event time minus the first, so a single-command
+  session is 0. A burst whose commands each follow the last within 30 minutes
+  can run longer than 30 minutes.
+- **Data source**: raw `cli.command.completed` logs, sessionized at query time.
+  The server keeps no per-install command history (the `installs` table has
+  first/last seen and first success only), so results are bounded by log
+  retention (~90 days), like `new-vs-returning` and `install-coverage`.
+  A persisted per-install history is out of scope.
+- **Who is seen**: only events with a `cli.install_id` (`basic` consent tier and
+  above). Anonymous-tier usage can't be tied to an install and is invisible
+  here; `/v1/metrics/install-coverage` says how much traffic that is.
+- **Window and filters**: sessions are clipped to the query window, so one
+  running across `from` or `to` is measured by the events inside it. The
+  `command`, `cli_version`, `os`, `arch` and `is_ci` filters pick the *events*
+  sessions are built from, before the gap rule is applied: `command=deploy`
+  measures bursts of `deploy` runs, and a session interrupted by other commands
+  may split. `exit_code` and `attr.*` don't apply.
+- Events with the same timestamp are ordered by command name, which only
+  matters for which of them comes first in a sequence.
+
+Endpoints, both tenant-scoped and not time-bucketed:
+
+- `GET /v1/metrics/session-length`: session count, median length, and sessions
+  per length bucket (`0`, `<1m`, `1-5m`, `5-15m`, `15-30m`, `30m+`; lower bound
+  inclusive, upper exclusive; every bucket is always listed).
+- `GET /v1/metrics/session-sequences`: the top-K most frequent ordered command
+  sequences with their session counts (`limit`/`offset` page the ranking, most
+  sessions first, ties by command names). A session's sequence is:
+  1. its commands in time order, events without a command name left out;
+  2. **consecutive repeats collapsed**: `deploy, deploy, status` is `deploy,
+     status`. Retries of one command are a friction signal (#16) rather than a
+     journey step, and would otherwise split one journey into many sequences;
+  3. **cut to the first 5 commands** (`storage.MaxSequenceLength`), so long
+     sessions are grouped by how they began instead of each being unique. An
+     n-gram approach would count a session many times and not add up to the
+     session count. The cut means a 5-command sequence may be a session that
+     went on; the response doesn't flag it.
+
+  Single-command sessions outnumber everything else, so `min_length` (1-5)
+  sets shorter sequences aside; it applies after the collapsing and the cut.
+
 ## Decisions (agreed)
 
 1. **Retention vs `installs`**: purge rows by `last_seen` against the
@@ -235,6 +285,7 @@ Steps 1 and 2 are independent and can be built in parallel.
     per kind. Like the funnel, discoveries count whenever they happened, so
     recent cohorts are still maturing. Install-level, so basic tier and above
     only (`/v1/metrics/install-coverage`).
+- Session length and command sequences (#14, done, unreleased, server side
+  only): see "Sessions" below.
 - Remaining from this design, tracked as issues: typo detection (#21),
-  repeated-failure and retry signals (#16), session length and command
-  sequences (#14).
+  repeated-failure and retry signals (#16).

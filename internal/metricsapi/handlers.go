@@ -2,7 +2,9 @@ package metricsapi
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/getargvio/argvio/internal/storage"
 )
@@ -192,6 +194,65 @@ func (s *Server) handleCounters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{responseDataKey: detail})
+}
+
+// handleSessionLengths serves /v1/metrics/session-length. Sessions are built
+// from raw logs over the whole window, not per time bucket, so it can't use
+// serveBucketed.
+func (s *Server) handleSessionLengths(w http.ResponseWriter, r *http.Request) {
+	scope, ok := scopeFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "missing tenant scope")
+		return
+	}
+	f, err := s.parseFilters(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	ctx, cancel := s.withQuery(r.Context())
+	defer cancel()
+	dist, err := s.QB.SessionLengthDistribution(ctx, scope, f)
+	if err != nil {
+		s.Log.Error("metricsapi: session lengths failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{responseDataKey: dist})
+}
+
+// handleSessionSequences serves /v1/metrics/session-sequences. The optional
+// `min_length` param sets aside sequences shorter than that many commands.
+func (s *Server) handleSessionSequences(w http.ResponseWriter, r *http.Request) {
+	scope, ok := scopeFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "missing tenant scope")
+		return
+	}
+	f, err := s.parseFilters(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	minLength := 1
+	if v := r.URL.Query().Get("min_length"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > storage.MaxSequenceLength {
+			writeError(w, http.StatusBadRequest, "invalid_request",
+				fmt.Sprintf("min_length must be an integer from 1 to %d", storage.MaxSequenceLength))
+			return
+		}
+		minLength = n
+	}
+	ctx, cancel := s.withQuery(r.Context())
+	defer cancel()
+	seqs, err := s.QB.SessionSequences(ctx, scope, f, minLength)
+	if err != nil {
+		s.Log.Error("metricsapi: session sequences failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{responseDataKey: seqs})
 }
 
 // handleVersionFootprint serves /v1/metrics/version-footprint. It isn't
