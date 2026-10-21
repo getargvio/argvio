@@ -143,57 +143,65 @@ func (s *Server) handleFeatureDiscovery(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{responseDataKey: points})
 }
 
-// handleCounters serves /v1/metrics/counters: the tenant's vendor counters
-// with their totals, or, with name=, one counter's time series (bucketed like
-// the other endpoints, optionally narrowed by label=) and its labels. Two
-// response shapes, so it can't use serveBucketed.
-func (s *Server) handleCounters(w http.ResponseWriter, r *http.Request) {
-	scope, ok := scopeFromContext(r.Context())
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "missing tenant scope")
-		return
-	}
-	f, err := s.parseFilters(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	q := r.URL.Query()
-	name := q.Get("name")
-	var label *string
-	if q.Has("label") {
-		if name == "" {
-			writeError(w, http.StatusBadRequest, "invalid_request", "label requires name")
+// serveVendorInstrument serves /v1/metrics/counters and /v1/metrics/measures:
+// the tenant's vendor instruments with their statistics, or, with name=, one
+// instrument's time series (bucketed like the other endpoints, optionally
+// narrowed by label=) and its labels. Two response shapes, so it can't use
+// serveBucketed.
+func serveVendorInstrument[L, D any](
+	s *Server,
+	name string,
+	list func(ctx context.Context, scope storage.TenantScope, f storage.Filters) (L, error),
+	series func(ctx context.Context, scope storage.TenantScope, f storage.Filters, name string, label *string, bucket storage.Bucket) (D, error),
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		scope, ok := scopeFromContext(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized", "missing tenant scope")
 			return
 		}
-		l := q.Get("label")
-		label = &l
-	}
-	ctx, cancel := s.withQuery(r.Context())
-	defer cancel()
-
-	if name == "" {
-		list, err := s.QB.Counters(ctx, scope, f)
+		f, err := s.parseFilters(r)
 		if err != nil {
-			s.Log.Error("metricsapi: counters failed", "error", err)
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		q := r.URL.Query()
+		instrument := q.Get("name")
+		var label *string
+		if q.Has("label") {
+			if instrument == "" {
+				writeError(w, http.StatusBadRequest, "invalid_request", "label requires name")
+				return
+			}
+			l := q.Get("label")
+			label = &l
+		}
+		ctx, cancel := s.withQuery(r.Context())
+		defer cancel()
+
+		if instrument == "" {
+			out, err := list(ctx, scope, f)
+			if err != nil {
+				s.Log.Error("metricsapi: "+name+" failed", "error", err)
+				writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{responseDataKey: out})
+			return
+		}
+		bucket, err := parseBucket(r, storage.BucketHour, anyBucket...)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		out, err := series(ctx, scope, f, instrument, label, bucket)
+		if err != nil {
+			s.Log.Error("metricsapi: "+name+" series failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{responseDataKey: list})
-		return
+		writeJSON(w, http.StatusOK, map[string]any{responseDataKey: out})
 	}
-	bucket, err := parseBucket(r, storage.BucketHour, anyBucket...)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	detail, err := s.QB.CounterSeries(ctx, scope, f, name, label, bucket)
-	if err != nil {
-		s.Log.Error("metricsapi: counter series failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{responseDataKey: detail})
 }
 
 // handleSessionLengths serves /v1/metrics/session-length. Sessions are built

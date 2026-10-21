@@ -1219,6 +1219,142 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /v1/metrics/measures:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
+    get:
+      summary: Vendor-defined durations, listed with statistics or one as a time series
+      description: |
+        Durations sent by the CLI as the `cli.measure` metric (a delta
+        histogram in `ms` with fixed bucket bounds): each data point holds the
+        durations recorded for the measure named by `cli.measure.name`,
+        optionally broken down by `cli.measure.label`.
+
+        **Warning: measures are accepted at the `anonymous` consent tier**,
+        like counters: names and labels must be fixed identifiers chosen in the
+        CLI's code, never user input, file paths, host names, URLs, tokens or
+        anything derived from them. The SDK does not scrub them; the server
+        only checks them against `^[a-z0-9][a-z0-9._-]*$` (at most 64
+        characters) and caps how many distinct values each tenant may have.
+
+        Without `name`, returns every measure name with its statistics over
+        the window, most recorded first, plus `overflow`: how many data points
+        were stored under `other` since the tenant started sending measures,
+        because it had reached `public.max_measure_names_per_tenant` distinct
+        names (`folded_names`; the label is dropped too) or a measure had
+        reached `public.max_measure_labels_per_name` distinct labels
+        (`folded_labels`). `bucket` does not apply. With `name`, returns that
+        measure's statistics per bucket (narrowed to one label with `label`)
+        and per label over the whole window, most recorded first, capped at
+        `limit`; a `null` label is data points sent without one.
+
+        `p50_ms`, `p95_ms` and `p99_ms` are **estimates** interpolated from the
+        summed counts of the fixed buckets (1, 5, 10, 50, 100, 500, 1000, 5000,
+        10000, 60000, 300000 ms) and clamped to `min_ms`/`max_ms`: they are
+        only as precise as the bucket they fall in is wide. They are those of
+        the whole window, bucket or label, never an average of percentiles.
+
+        Read from hourly and daily rollups: durations for the current hour
+        appear once it is materialized, within about an hour.
+      operationId: measures
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - name: name
+          in: query
+          required: false
+          description: Measure name. Switches the response to that measure's series and labels.
+          schema: { type: string }
+        - name: label
+          in: query
+          required: false
+          description: Narrow the series to one label. Requires `name`.
+          schema: { type: string }
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/Command"
+        - $ref: "#/components/parameters/IsCI"
+        - $ref: "#/components/parameters/Bucket"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: A MeasureList without `name`, a MeasureDetail with it.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    oneOf:
+                      - $ref: "#/components/schemas/MeasureList"
+                      - $ref: "#/components/schemas/MeasureDetail"
+              examples:
+                list:
+                  summary: Without name
+                  value:
+                    data:
+                      measures:
+                        - name: john.run
+                          label_count: 3
+                          count: 1210
+                          datapoint_count: 340
+                          sum_ms: 912400
+                          min_ms: 42
+                          max_ms: 58210
+                          p50_ms: 310
+                          p95_ms: 4120
+                          p99_ms: 9300
+                      overflow:
+                        folded_names: 0
+                        folded_labels: 12
+                        last_folded_at: "2026-10-18T14:02:11Z"
+                series:
+                  summary: With name=john.run&bucket=day
+                  value:
+                    data:
+                      name: john.run
+                      series:
+                        - bucket: "2026-10-17T00:00:00Z"
+                          count: 590
+                          datapoint_count: 170
+                          sum_ms: 441000
+                          min_ms: 42
+                          max_ms: 31000
+                          p50_ms: 305
+                          p95_ms: 4000
+                          p99_ms: 8800
+                      labels:
+                        - label: hmac-sha256
+                          count: 900
+                          datapoint_count: 250
+                          sum_ms: 612000
+                          min_ms: 60
+                          max_ms: 58210
+                          p50_ms: 290
+                          p95_ms: 4100
+                          p99_ms: 9300
+                        - label: null
+                          count: 310
+                          datapoint_count: 90
+                          sum_ms: 300400
+                          min_ms: 42
+                          max_ms: 12000
+                          p50_ms: 330
+                          p95_ms: 4200
+                          p99_ms: 8000
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /v1/metrics/install-methods:
     parameters:
       - $ref: "#/components/parameters/TenantHeader"
@@ -2181,6 +2317,73 @@ components:
               label: { type: string, nullable: true, description: "null for data points sent without a label; other for labels past the cap" }
               total: { type: number }
             required: [label, total]
+      required: [name, series, labels]
+
+    MeasureStats:
+      type: object
+      description: Statistics of the durations behind a group of cli.measure data points.
+      properties:
+        count: { type: integer, description: "Durations recorded." }
+        datapoint_count: { type: integer, description: "Data points they came in (roughly, process exports)." }
+        sum_ms: { type: number, description: "Sum of the durations the SDKs reported a sum for." }
+        min_ms: { type: number, nullable: true, description: "Smallest duration, null if no SDK reported a minimum." }
+        max_ms: { type: number, nullable: true, description: "Largest duration, null if no SDK reported a maximum." }
+        p50_ms: { type: number, nullable: true, description: "Estimated median, interpolated from the fixed buckets; null if nothing was recorded." }
+        p95_ms: { type: number, nullable: true, description: "Estimated 95th percentile, as p50_ms." }
+        p99_ms: { type: number, nullable: true, description: "Estimated 99th percentile, as p50_ms." }
+      required: [count, datapoint_count, sum_ms, min_ms, max_ms, p50_ms, p95_ms, p99_ms]
+
+    MeasureSummary:
+      allOf:
+        - $ref: "#/components/schemas/MeasureStats"
+        - type: object
+          properties:
+            name: { type: string }
+            label_count: { type: integer, description: "Distinct labels it was reported with, including other." }
+          required: [name, label_count]
+
+    MeasureOverflow:
+      type: object
+      description: Data points stored under "other" since the tenant's measures were first recorded, by which cap folded them.
+      properties:
+        folded_names: { type: integer }
+        folded_labels: { type: integer }
+        last_folded_at: { type: string, format: date-time, nullable: true }
+      required: [folded_names, folded_labels, last_folded_at]
+
+    MeasureList:
+      type: object
+      properties:
+        measures:
+          type: array
+          items: { $ref: "#/components/schemas/MeasureSummary" }
+        overflow: { $ref: "#/components/schemas/MeasureOverflow" }
+      required: [measures, overflow]
+
+    MeasurePoint:
+      allOf:
+        - $ref: "#/components/schemas/MeasureStats"
+        - type: object
+          properties:
+            bucket: { type: string, format: date-time }
+          required: [bucket]
+
+    MeasureDetail:
+      type: object
+      properties:
+        name: { type: string }
+        series:
+          type: array
+          items: { $ref: "#/components/schemas/MeasurePoint" }
+        labels:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/MeasureStats"
+              - type: object
+                properties:
+                  label: { type: string, nullable: true, description: "null for data points sent without a label; other for labels past the cap" }
+                required: [label]
       required: [name, series, labels]
 
     VersionChangePoint:

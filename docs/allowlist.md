@@ -53,6 +53,12 @@ metrics:
     temporality: delta                 # optional, sum only: reject other temporalities
     required_attributes: [cli.counter.name]  # optional: reject points that lose these
     allowed_attributes: [cli.counter.name, cli.counter.label, ...]
+  - name: cli.measure
+    type: histogram
+    unit: ms
+    temporality: delta                 # optional, sum and histogram: reject other temporalities
+    explicit_bounds: [1, 5, 10, ...]   # optional, histogram only: the only bucket bounds accepted
+    allowed_attributes: [cli.measure.name, cli.measure.label, ...]
 
 spans:
   - name_pattern: "cli.command.*"     # trailing "*" wildcard only
@@ -96,7 +102,11 @@ For each span / log record / metric data point:
    of its metric's `required_attributes` after step 4 is rejected: it would
    mean nothing. Before any of this, a metric with a declared `temporality`
    is rejected whole if it was sent with another one, and a `monotonic`
-   sum's data point is rejected if its value is negative or not finite.
+   sum's data point is rejected if its value is negative or not finite. A
+   metric with declared `explicit_bounds` is rejected whole if it isn't in the
+   declared `unit`, and a data point of it is rejected if its bucket bounds
+   differ, its bucket counts don't add up to its count, or its sum, min or max
+   is negative or not finite.
 
 Every drop/reject is logged with the reason and the attribute *key* —
 never the value, since the value may be exactly the sensitive thing being
@@ -106,7 +116,7 @@ dropped.
 
 | Tier | Adds |
 |---|---|
-| `anonymous` | Aggregate-only shape: `cli.command.name`, `cli.command.exit_code`, `cli.command.duration_ms`, `cli.version`, `cli.os`, `cli.arch`, `cli.is_ci`, and vendor counters (`cli.counter.name`, `cli.counter.label`; **see the warning under "Vendor counters"**). |
+| `anonymous` | Aggregate-only shape: `cli.command.name`, `cli.command.exit_code`, `cli.command.duration_ms`, `cli.version`, `cli.os`, `cli.arch`, `cli.is_ci`, vendor counters (`cli.counter.name`, `cli.counter.label`; **see the warning under "Vendor counters"**) and vendor durations (`cli.measure.name`, `cli.measure.label`; **see "Vendor measures"**). |
 | `basic` | Opaque `cli.session_id`/`cli.install_id` (random UUIDs, not identity-linked), `cli.flag.names` (names only, not values), shell/terminal metadata, the coarse `cli.error.type` category and the vendor's finer `cli.error.reason` (see below), and process resource usage on the command span (`cli.process.peak_rss_bytes`, `cli.process.cpu_time_ms`), and build footprint on `cli.session.started` (`cli.binary.size_bytes`, `cli.startup.duration_ms`). |
 | `full` | Error diagnostics (`cli.error.message`/`stacktrace`), the full allowlisted attribute set for allowed events. |
 | `optin_plus` | Fields marked `sensitive: true` explicitly: `cli.args.raw`, `cli.env.vars`, `cli.host.name`, `cli.user.name`, `cli.path.raw`. Only accepted if **both** the tenant's ceiling is `optin_plus` and the record itself declares it. |
@@ -204,6 +214,69 @@ series (hour/day/week/month) and its top labels. Both read the
 `cagg_counters_hourly` / `cagg_counters_daily` rollups (docs/schema.md). No
 per-install distinct count is offered: the points carry no install id, by
 design.
+
+## Vendor measures (`cli.measure`)
+
+> **Warning: measures are accepted at the `anonymous` tier**, exactly like
+> counters (see the warning under "Vendor counters"). `cli.measure.name` and
+> `cli.measure.label` must be **fixed identifiers chosen in the CLI's code**:
+> never user input, file paths, host names, URLs, tokens, or anything derived
+> from them. The SDK does not scrub them.
+
+`cli.measure` is the counterpart of `cli.counter` for durations: one generic
+instrument for how long things specific to a vendor's product take (external
+tools, network probes, scans), so a new one needs no server change. It is a
+`histogram`, unit `ms`, and must be sent with **delta** temporality: each data
+point holds the durations recorded since the last export for the measure named
+by `cli.measure.name`, optionally broken down by `cli.measure.label`. It may
+also carry `cli.command.name`, `cli.version`, `cli.os`, `cli.arch` and
+`cli.is_ci`, and nothing that identifies an install or a session. Compose a
+label such as `hmac-sha256` to correlate several dimensions within the
+64-byte / per-name label limits; arbitrary numeric attributes are not
+supported.
+
+The buckets are fixed by the server so that SDKs in different languages
+agree and their counts can be added: `explicit_bounds` in the schema, in
+milliseconds,
+
+    1, 5, 10, 50, 100, 500, 1000, 5000, 10000, 60000, 300000
+
+that is 12 buckets, `(-inf, 1]` to `(300000, +inf)`. SDKs configure their
+histogram view with exactly these.
+
+What the server enforces:
+
+1. **Shape.** A `cli.measure` metric that is not a histogram in `ms` with
+   delta temporality is rejected whole. A data point whose bucket bounds
+   differ from the above, whose bucket counts don't add up to its count, or
+   whose sum, min or max is negative or not finite, is rejected.
+2. **Format.** Name and label have the same `pattern` and `max_length: 64` as
+   counters: `^[a-z0-9][a-z0-9._-]*$`. A label that fails it is dropped (the
+   point is kept, unlabelled); a name that fails it, or is missing, rejects
+   the point, since `cli.measure.name` is a `required_attributes` entry.
+3. **Cardinality**, per tenant, in the `measure_names` and `measure_labels`
+   tables: at most `public.max_measure_names_per_tenant` distinct names
+   (default 100) and `public.max_measure_labels_per_name` distinct labels per
+   name (default 50), independent of the counter caps. Folding works as for
+   counters: past the name cap the point is stored under the name `other`
+   without a label, past a label cap its label becomes `other`, folded points
+   are counted in `measure_overflow` (`folded_names`, `folded_labels`,
+   `last_folded_at`), logged as a warning and reported by the API, and
+   `argvio retention sweep` frees the slots of values no longer sent. The cap
+   is applied in the ingest pipeline after allowlist filtering and before the
+   rows are written (`internal/otlp/measures.go`).
+
+`GET /v1/metrics/measures` lists the measure names with their count, sum,
+min, max and p50/p95/p99 over a window, and the fold counts; with `name=` it
+returns that measure's series (hour/day/week/month) and the same statistics
+per label, all narrowable by version, OS, arch, command and CI. Both read the
+`cagg_measures_hourly` / `cagg_measures_daily` rollups (docs/schema.md). The
+percentiles are **estimates**: the rollups keep the summed count of each
+bucket, and the percentile is interpolated inside the bucket it falls in
+(`internal/storage/measure_percentiles.go`), so they are only as precise as
+the bucket is narrow (a p95 of 700 ms means somewhere in 500-1000 ms) and
+clamped to the observed min and max. Changing the bounds takes a new
+migration, since the rollups have one column per bucket.
 
 ## Worked example: adding a new supported log event
 

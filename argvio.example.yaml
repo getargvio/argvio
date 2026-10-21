@@ -93,6 +93,9 @@ public:
   # ones past a cap are stored as "other" (docs/allowlist.md).
   max_counter_names_per_tenant: 200
   max_counter_labels_per_name: 50
+  # The same for cli.measure names and labels (docs/allowlist.md).
+  max_measure_names_per_tenant: 100
+  max_measure_labels_per_name: 50
   rate_limit_requests_per_second: 200
   rate_limit_bytes_per_second: 5000000
   rate_limit_burst: 400

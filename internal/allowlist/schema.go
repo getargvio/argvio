@@ -11,6 +11,7 @@ package allowlist
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 )
 
@@ -57,8 +58,13 @@ type MetricDef struct {
 	Unit      string `yaml:"unit"`
 	Monotonic bool   `yaml:"monotonic,omitempty"`
 	// Temporality, if set (delta | cumulative), is the only aggregation
-	// temporality accepted for this metric, which must then be a sum.
+	// temporality accepted for this metric, which must then be a sum or a
+	// histogram.
 	Temporality string `yaml:"temporality,omitempty"`
+	// ExplicitBounds, if set, are the only bucket boundaries accepted for
+	// this metric, which must then be a histogram. Fixing them server-side
+	// makes the buckets of different SDKs and data points addable.
+	ExplicitBounds []float64 `yaml:"explicit_bounds,omitempty"`
 	// RequiredAttributes must survive attribute filtering for a data point
 	// to be kept; each must also be in AllowedAttributes.
 	RequiredAttributes []string `yaml:"required_attributes,omitempty"`
@@ -214,11 +220,21 @@ func (s *Schema) finalize() error {
 		switch m.Temporality {
 		case "":
 		case TemporalityDelta, TemporalityCumulative:
-			if m.Type != "sum" {
-				return fmt.Errorf("allowlist: metric %q: temporality is only supported on type sum", m.Name)
+			if m.Type != "sum" && m.Type != "histogram" {
+				return fmt.Errorf("allowlist: metric %q: temporality is only supported on types sum and histogram", m.Name)
 			}
 		default:
 			return fmt.Errorf("allowlist: metric %q: unknown temporality %q", m.Name, m.Temporality)
+		}
+		if len(m.ExplicitBounds) > 0 {
+			if m.Type != "histogram" {
+				return fmt.Errorf("allowlist: metric %q: explicit_bounds is only supported on type histogram", m.Name)
+			}
+			for i, b := range m.ExplicitBounds {
+				if math.IsNaN(b) || math.IsInf(b, 0) || (i > 0 && b <= m.ExplicitBounds[i-1]) {
+					return fmt.Errorf("allowlist: metric %q: explicit_bounds must be finite and strictly increasing", m.Name)
+				}
+			}
 		}
 		allowed := AllowedSet(m.AllowedAttributes)
 		for _, k := range m.RequiredAttributes {

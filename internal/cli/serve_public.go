@@ -126,6 +126,8 @@ func runPublic(cfg *config.Root, log *slog.Logger) error {
 		MaxErrorReasonsPerTenant:      cfg.Public.MaxErrorReasonsPerTenant,
 		MaxCounterNamesPerTenant:      cfg.Public.MaxCounterNamesPerTenant,
 		MaxCounterLabelsPerName:       cfg.Public.MaxCounterLabelsPerName,
+		MaxMeasureNamesPerTenant:      cfg.Public.MaxMeasureNamesPerTenant,
+		MaxMeasureLabelsPerName:       cfg.Public.MaxMeasureLabelsPerName,
 	}
 
 	srv := otlp.NewServer(verifier, schemaLoader, storage.NewWriter(pool), bounds, limiter, log)
