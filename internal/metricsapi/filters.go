@@ -11,11 +11,44 @@ import (
 	"github.com/getargvio/argvio/internal/storage"
 )
 
-// parseFilters builds a storage.Filters from query parameters, enforcing
-// MaxTimeRangeSpan (the "no 5-year raw scan" guard from
-// docs/configuration.md) and page-size bounds before the request ever
-// reaches internal/storage.
+// parseFilters builds a storage.Filters for an aggregate endpoint. Those read
+// rollups and event queries that carry no attribute columns, so attr.*,
+// attr_contains.* and attr_in.* are rejected rather than silently ignored,
+// which would return unfiltered numbers that look filtered.
 func (s *Server) parseFilters(r *http.Request) (storage.Filters, error) {
+	if key := firstAttrParam(r.URL.Query()); key != "" {
+		return storage.Filters{}, fmt.Errorf("%s is not supported on this endpoint: attribute filters only apply to /v1/traces", key)
+	}
+	return s.parseFiltersWithAttrs(r)
+}
+
+// firstAttrParam returns the alphabetically first attribute filter param
+// present in q, or "" if there is none, so the error is deterministic.
+func firstAttrParam(q map[string][]string) string {
+	var found []string
+	for key := range q {
+		if isAttrParam(key) {
+			found = append(found, key)
+		}
+	}
+	if len(found) == 0 {
+		return ""
+	}
+	return slices.Min(found)
+}
+
+func isAttrParam(key string) bool {
+	return strings.HasPrefix(key, "attr.") ||
+		strings.HasPrefix(key, "attr_contains.") ||
+		strings.HasPrefix(key, "attr_in.")
+}
+
+// parseFiltersWithAttrs builds a storage.Filters from query parameters,
+// enforcing MaxTimeRangeSpan (the "no 5-year raw scan" guard from
+// docs/configuration.md) and page-size bounds before the request ever
+// reaches internal/storage. Only /v1/traces, which reads raw span
+// attributes, calls it directly.
+func (s *Server) parseFiltersWithAttrs(r *http.Request) (storage.Filters, error) {
 	q := r.URL.Query()
 	var f storage.Filters
 

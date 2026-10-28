@@ -4,6 +4,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,11 +59,26 @@ func TestParseBucket(t *testing.T) {
 	}
 }
 
+func TestParseFiltersRejectsAttrFilters(t *testing.T) {
+	s := &Server{MaxTimeRangeSpan: 24 * time.Hour, DefaultResultPageSize: 10, MaxResultPageSize: 100}
+	for _, param := range []string{"attr.cli.ci_provider=github_actions", "attr_contains.a=b", "attr_in.a=b,c"} {
+		r := httptest.NewRequest("GET", "/?from=2026-01-01T00:00:00Z&to=2026-01-01T01:00:00Z&"+param, nil)
+		_, err := s.parseFilters(r)
+		if err == nil {
+			t.Errorf("parseFilters(%q) = nil error, want rejection", param)
+			continue
+		}
+		if key, _, _ := strings.Cut(param, "="); !strings.Contains(err.Error(), key) {
+			t.Errorf("parseFilters(%q) error %q does not name %q", param, err, key)
+		}
+	}
+}
+
 func TestParseFiltersAttrOperators(t *testing.T) {
 	s := &Server{MaxTimeRangeSpan: 24 * time.Hour, DefaultResultPageSize: 10, MaxResultPageSize: 100}
 	r := httptest.NewRequest("GET", "/?from=2026-01-01T00:00:00Z&to=2026-01-01T01:00:00Z"+
 		"&attr.a.b=x&attr_contains.c.d=git&attr_contains.e=&attr_in.f=p,q&attr_in.f=r&attr_in.g=", nil)
-	f, err := s.parseFilters(r)
+	f, err := s.parseFiltersWithAttrs(r)
 	if err != nil {
 		t.Fatal(err)
 	}
