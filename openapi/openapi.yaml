@@ -1768,6 +1768,85 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /v1/metrics/session-environment:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
+    get:
+      summary: Distribution of a session's environment (shell, terminal, TTY, runtime, config, auth state)
+      description: >
+        How sessions are spread over one fact about the environment the CLI ran
+        in, picked with dimension: shell (cli.shell), terminal (cli.terminal),
+        stdout_tty (cli.stdout.is_tty: tty or piped), runtime (cli.runtime.name),
+        runtime_version (cli.runtime.name and cli.runtime.version together, as
+        "go 1.22.1"; a session reporting only one of the two is not counted),
+        config_customization (cli.config.customized_count, reported only as the
+        ranges 0, 1-2, 3-5 and 6+; a negative count is not counted) and
+        auth_state (cli.auth.state: authenticated, anonymous or unknown).
+        The result is the top limit values, most sessions first (ties by value),
+        and the rest folded into other, with how many distinct values that is:
+        terminal, shell and runtime are free text that a client can influence, so
+        the list is capped. The values and other add up to reported_sessions.
+        session_count is every session start in scope; the difference with
+        reported_sessions did not report the fact (anonymous consent tier, which
+        strips these attributes; an SDK or CLI that does not send it).
+        Reads cli.session.started logs, so it is bounded by log retention, and
+        only basic consent tier or above sessions are represented in
+        reported_sessions; see /v1/metrics/install-coverage for how much traffic
+        is anonymous. Sessions here are process starts, not the command bursts of
+        /v1/metrics/session-length. The cli_version, os, arch and is_ci filters
+        apply; command, exit_code and attr filters do not, as a session start has
+        no command. offset does not apply.
+      operationId: sessionEnvironment
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - name: dimension
+          in: query
+          required: true
+          description: The fact to take the distribution of.
+          schema:
+            type: string
+            enum: [shell, terminal, stdout_tty, runtime, runtime_version, config_customization, auth_state]
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/IsCI"
+        - name: limit
+          in: query
+          required: false
+          description: How many values to list before folding the rest into other. Clamped server-side to MetricsConfig.max_result_page_size.
+          schema: { type: integer, minimum: 1, default: 100 }
+      responses:
+        "200":
+          description: The distribution of the dimension.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnvironmentDistribution"
+              example:
+                data:
+                  dimension: shell
+                  session_count: 5210
+                  reported_sessions: 4388
+                  values:
+                    - { value: zsh, session_count: 2301 }
+                    - { value: bash, session_count: 1744 }
+                    - { value: fish, session_count: 301 }
+                  other: { value_count: 7, session_count: 42 }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /v1/metrics/retries:
     parameters:
       - $ref: "#/components/parameters/TenantHeader"
@@ -2614,6 +2693,32 @@ components:
           description: Commands in the order they ran, repeats collapsed, at most 5
         sessions: { type: integer, description: Sessions with this sequence }
       required: [commands, sessions]
+
+    EnvironmentValue:
+      type: object
+      properties:
+        value: { type: string }
+        session_count: { type: integer }
+      required: [value, session_count]
+
+    EnvironmentDistribution:
+      type: object
+      properties:
+        dimension: { type: string, enum: [shell, terminal, stdout_tty, runtime, runtime_version, config_customization, auth_state] }
+        session_count: { type: integer, description: Session starts in scope }
+        reported_sessions: { type: integer, description: Session starts that reported the dimension }
+        values:
+          type: array
+          items:
+            $ref: "#/components/schemas/EnvironmentValue"
+        other:
+          type: object
+          description: Values past the limit, folded together. Both are 0 when nothing was folded.
+          properties:
+            value_count: { type: integer, description: Distinct values folded }
+            session_count: { type: integer, description: Sessions behind them }
+          required: [value_count, session_count]
+      required: [dimension, session_count, reported_sessions, values, other]
 
     RetryPoint:
       type: object

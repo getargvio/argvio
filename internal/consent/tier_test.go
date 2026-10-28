@@ -232,6 +232,52 @@ func TestEvaluateEvent_ErrorReasonPattern(t *testing.T) {
 	}
 }
 
+// The session environment attributes are basic tier: kept on a session start
+// from basic up, stripped from an anonymous one. An auth state outside its
+// enum is dropped and the session record kept.
+func TestEvaluateEvent_SessionEnvironment(t *testing.T) {
+	s := loadSchema(t)
+	def := logEventDef(s, "cli.session.started")
+	attrs := func(auth string) map[string]any {
+		return map[string]any{
+			"cli.stdout.is_tty":           true,
+			"cli.runtime.name":            "go",
+			"cli.runtime.version":         "1.22.1",
+			"cli.config.customized_count": int64(3),
+			"cli.auth.state":              auth,
+		}
+	}
+	keys := []string{"cli.stdout.is_tty", "cli.runtime.name", "cli.runtime.version", "cli.config.customized_count", "cli.auth.state"}
+
+	dec := EvaluateEvent(s, def, "basic", "basic", ModeStrip, attrs("authenticated"))
+	if !dec.Accepted {
+		t.Fatalf("record rejected: %s", dec.RejectReason)
+	}
+	for _, k := range keys {
+		if _, kept := dec.KeptAttributes[k]; !kept {
+			t.Errorf("basic tier should keep %s", k)
+		}
+	}
+
+	dec = EvaluateEvent(s, def, "anonymous", "basic", ModeStrip, attrs("authenticated"))
+	for _, k := range keys {
+		if _, kept := dec.KeptAttributes[k]; kept {
+			t.Errorf("anonymous tier should strip %s", k)
+		}
+	}
+
+	dec = EvaluateEvent(s, def, "basic", "basic", ModeStrip, attrs("alice@example.com"))
+	if !dec.Accepted {
+		t.Fatalf("a bad auth state should not reject the record: %s", dec.RejectReason)
+	}
+	if _, kept := dec.KeptAttributes["cli.auth.state"]; kept {
+		t.Error("an auth state outside the enum should be dropped")
+	}
+	if _, kept := dec.KeptAttributes["cli.runtime.name"]; !kept {
+		t.Error("the other attributes should be kept")
+	}
+}
+
 // A counter data point is kept at the anonymous tier, and rejected outright
 // when its name is missing or fails the pattern: it would count nothing.
 func TestEvaluateEvent_CounterRequiresName(t *testing.T) {

@@ -447,3 +447,68 @@ metrics:
 		t.Errorf("valid metric: %v", err)
 	}
 }
+
+// The session environment attributes are basic-tier, non-sensitive, and only
+// carried once per process on cli.session.started.
+func TestSessionEnvironmentAttributes(t *testing.T) {
+	s := loadRealSchema(t)
+	basic, _ := s.TierRank("basic")
+	types := map[string]AttrType{
+		"cli.shell":                   AttrString,
+		"cli.terminal":                AttrString,
+		"cli.stdout.is_tty":           AttrBool,
+		"cli.runtime.name":            AttrString,
+		"cli.runtime.version":         AttrString,
+		"cli.config.customized_count": AttrInt,
+		"cli.auth.state":              AttrString,
+	}
+	session, ok := s.LogEventByName("cli.session.started")
+	if !ok {
+		t.Fatal("expected cli.session.started to be defined")
+	}
+	for a, typ := range types {
+		def, ok := s.AttrDefFor(a)
+		if !ok {
+			t.Fatalf("attribute %s not defined", a)
+		}
+		if def.Type != typ || def.Sensitive {
+			t.Errorf("%s = %+v, want a non-sensitive %s", a, def, typ)
+		}
+		if rank, _ := s.TierRank(def.MinTier); rank != basic {
+			t.Errorf("%s min_tier = %s, want basic", a, def.MinTier)
+		}
+		if !slices.Contains(session.AllowedAttributes, a) {
+			t.Errorf("cli.session.started should allow %s", a)
+		}
+		for _, ev := range []string{"cli.command.invoked", "cli.command.completed"} {
+			def, _ := s.LogEventByName(ev)
+			if slices.Contains(def.AllowedAttributes, a) {
+				t.Errorf("%s should not allow %s", ev, a)
+			}
+		}
+	}
+
+	// Free text is bounded.
+	for _, a := range []string{"cli.runtime.name", "cli.runtime.version"} {
+		def, _ := s.AttrDefFor(a)
+		long := strings.Repeat("a", 33)
+		if err := CheckAttribute(def, "go"); err != nil {
+			t.Errorf("%s: CheckAttribute(go) = %v, want nil", a, err)
+		}
+		if err := CheckAttribute(def, long); err == nil {
+			t.Errorf("%s: a 33-byte value should be rejected", a)
+		}
+	}
+
+	auth, _ := s.AttrDefFor("cli.auth.state")
+	for _, v := range []string{"authenticated", "anonymous", "unknown"} {
+		if err := CheckAttribute(auth, v); err != nil {
+			t.Errorf("CheckAttribute(%q) = %v, want nil", v, err)
+		}
+	}
+	for _, v := range []string{"", "Authenticated", "alice@example.com", "signed-in"} {
+		if err := CheckAttribute(auth, v); err == nil {
+			t.Errorf("CheckAttribute(%q) = nil, want an error", v)
+		}
+	}
+}

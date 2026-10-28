@@ -259,6 +259,55 @@ config is created, and an upgrade invalidates what the last version built.
   rows. Computed per bucket from the raw runs, so unlike `latency` there is no
   rollup to merge: wide ranges cost a scan of the logs.
 
+### 9. Session environment
+
+`/v1/metrics/install-coverage` says how much traffic is seen; the environment
+endpoint says what that traffic runs on. `GET /v1/metrics/session-environment`
+takes the distribution of one fact reported on `cli.session.started`, picked
+with the required `dimension` param:
+
+| `dimension` | Attribute | Values |
+| --- | --- | --- |
+| `shell` | `cli.shell` | as reported (`bash`, `zsh`, ...) |
+| `terminal` | `cli.terminal` | as reported |
+| `stdout_tty` | `cli.stdout.is_tty` | `tty`, `piped` |
+| `runtime` | `cli.runtime.name` | as reported (`go`, `node`, ...) |
+| `runtime_version` | `cli.runtime.name` + `cli.runtime.version` | `go 1.22.1` |
+| `config_customization` | `cli.config.customized_count` | `0`, `1-2`, `3-5`, `6+` |
+| `auth_state` | `cli.auth.state` | `authenticated`, `anonymous`, `unknown` |
+
+- **Allowlist**: `cli.stdout.is_tty`, `cli.runtime.name`,
+  `cli.runtime.version`, `cli.config.customized_count` and `cli.auth.state` are
+  new, `basic` tier, non-sensitive and allowed on `cli.session.started` only
+  (one per process, not per command). `cli.runtime.*` are bounded to 32 bytes;
+  `cli.auth.state` is an enum, and a value outside it is dropped with the
+  session kept. `cli.config.customized_count` is a count, never the settings'
+  names or values. The SDKs that send them are separate work (argvio-go#6,
+  argvio-go#7, argvio-node#9, argvio-node#10).
+- **Why a dimension param, not an endpoint each**: they share one query shape,
+  and a new fact is then one expression, not one handler, route and OpenAPI
+  path.
+- **Top-K and `other`**: `terminal`, `shell` and the runtime are free text a
+  client can influence, so the response lists the top `limit` values, most
+  sessions first (ties by value), and folds the rest into `other` (`value_count`
+  distinct values, `session_count` sessions). `other` is a separate object, not
+  a value, so it can't collide with a terminal that calls itself "other".
+  `offset` doesn't apply. `config_customization` is bucketed server-side, so
+  the number a CLI reports never appears in a result; a negative count is not
+  a believable measurement and is not reported.
+- **Not reported**: `session_count` is every session start in scope and
+  `reported_sessions` those that carried the fact, so the difference did not:
+  anonymous tier (which strips every one of these), an older SDK, or a CLI that
+  can't tell. `values` and `other` add up to `reported_sessions`, never to
+  `session_count`. `runtime_version` needs both attributes: a version without
+  its runtime is ambiguous, and counts as not reported.
+- **Unit**: process starts (`cli.session.started`), not the command bursts of
+  "Sessions". A heavy user weighs by how often they start the CLI.
+- **Retention, filters**: raw logs, so bounded by log retention. The
+  `cli_version`, `os`, `arch` and `is_ci` filters apply; `command`,
+  `exit_code` and `attr.*` don't (a session start has no command). No
+  migration.
+
 ## Decisions (agreed)
 
 1. **Retention vs `installs`**: purge rows by `last_seen` against the
@@ -378,3 +427,7 @@ Steps 1 and 2 are independent and can be built in parallel.
   `GET /v1/metrics/latency-cold-warm`, see "Cold vs. warm latency" above. No
   migration and no SDK change: cold is derived from `installs`,
   `install_version_changes` and the existing `cli.command.duration_ms`.
+- Session environment (#22, done, unreleased, server side only):
+  `GET /v1/metrics/session-environment`, see "Session environment" above. The
+  allowlist accepts the new attributes now; the SDK work is tracked in
+  argvio-go#6/#7 and argvio-node#9/#10. No migration.
