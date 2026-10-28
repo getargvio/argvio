@@ -68,6 +68,7 @@ func (s *Server) router() http.Handler {
 		r.Get("/v1/metrics/session-sequences", s.handleSessionSequences)
 		r.Get("/v1/metrics/retries", s.handleRetries)
 		r.Get("/v1/metrics/session-environment", s.handleSessionEnvironment)
+		r.Get("/v1/metrics/unknown-commands", s.handleUnknownCommands)
 		r.Get("/v1/metrics/retention", serveBucketed(s, "retention", storage.BucketWeek, dailyBucket, s.QB.Retention))
 	})
 

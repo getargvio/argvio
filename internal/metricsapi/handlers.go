@@ -334,6 +334,36 @@ func (s *Server) handleSessionEnvironment(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{responseDataKey: dist})
 }
 
+// handleUnknownCommands serves /v1/metrics/unknown-commands: the attempt rate
+// per bucket and the top suggestions. The two halves have different shapes, so
+// it can't use serveBucketed.
+func (s *Server) handleUnknownCommands(w http.ResponseWriter, r *http.Request) {
+	scope, ok := scopeFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "missing tenant scope")
+		return
+	}
+	f, err := s.parseFilters(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	bucket, err := parseBucket(r, storage.BucketDay, anyBucket...)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	ctx, cancel := s.withQuery(r.Context())
+	defer cancel()
+	res, err := s.QB.UnknownCommands(ctx, scope, f, bucket)
+	if err != nil {
+		s.Log.Error("metricsapi: unknown commands failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{responseDataKey: res})
+}
+
 // handleVersionFootprint serves /v1/metrics/version-footprint. It isn't
 // time-bucketed (one row per CLI version over the whole window, ordered by
 // version rather than by time), so it can't use serveBucketed.

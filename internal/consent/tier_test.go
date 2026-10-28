@@ -2,6 +2,7 @@ package consent
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/getargvio/argvio/internal/allowlist"
@@ -309,5 +310,68 @@ func TestEvaluateEvent_CounterRequiresName(t *testing.T) {
 		if dec := EvaluateEvent(s, def, "anonymous", "basic", ModeStrip, attrs); dec.Accepted {
 			t.Errorf("%v: accepted, want rejected for a missing or invalid name", attrs)
 		}
+	}
+}
+
+// The suggestion is basic tier: kept from basic up, stripped from an anonymous
+// attempt, which is then a bare count. Whatever else a client sends on the
+// event, such as what the user typed under another attribute, is dropped.
+func TestEvaluateEvent_UnknownCommand(t *testing.T) {
+	s := loadSchema(t)
+	def := logEventDef(s, "cli.command.unknown")
+	attrs := func() map[string]any {
+		return map[string]any{
+			"cli.command.suggestion": "deploy.push",
+			"cli.version":            "1.2.3",
+			"cli.os":                 "linux",
+			// Where typed text might be put.
+			"cli.command.name": "depoly",
+			"cli.flag.names":   []any{"--depoly"},
+			"cli.args.raw":     "depoly --token abc",
+			"cli.help.flag":    "depoly",
+		}
+	}
+
+	for _, tier := range []string{"basic", "full", "optin_plus"} {
+		dec := EvaluateEvent(s, def, tier, "optin_plus", ModeStrip, attrs())
+		if !dec.Accepted {
+			t.Fatalf("%s: record rejected: %s", tier, dec.RejectReason)
+		}
+		if got := dec.KeptAttributes["cli.command.suggestion"]; got != "deploy.push" {
+			t.Errorf("%s: suggestion = %v, want it kept", tier, got)
+		}
+		for _, k := range []string{"cli.command.name", "cli.flag.names", "cli.args.raw", "cli.help.flag"} {
+			if _, kept := dec.KeptAttributes[k]; kept {
+				t.Errorf("%s: %s should be dropped from cli.command.unknown", tier, k)
+			}
+		}
+	}
+
+	dec := EvaluateEvent(s, def, "anonymous", "optin_plus", ModeStrip, attrs())
+	if !dec.Accepted {
+		t.Fatalf("anonymous attempt rejected: %s", dec.RejectReason)
+	}
+	if _, kept := dec.KeptAttributes["cli.command.suggestion"]; kept {
+		t.Error("anonymous tier should strip the suggestion")
+	}
+	if dec.KeptAttributes["cli.version"] != "1.2.3" || dec.KeptAttributes["cli.os"] != "linux" {
+		t.Errorf("anonymous attempt should keep its anonymous attributes, got %v", dec.KeptAttributes)
+	}
+
+	// A tenant capped at anonymous gets the same, whatever the record declares.
+	dec = EvaluateEvent(s, def, "optin_plus", "anonymous", ModeStrip, attrs())
+	if _, kept := dec.KeptAttributes["cli.command.suggestion"]; kept {
+		t.Error("a tenant ceiling of anonymous should strip the suggestion")
+	}
+
+	// Over the limit: dropped, the attempt still counted.
+	long := attrs()
+	long["cli.command.suggestion"] = strings.Repeat("a", 129)
+	dec = EvaluateEvent(s, def, "basic", "basic", ModeStrip, long)
+	if !dec.Accepted {
+		t.Fatalf("a long suggestion should not reject the attempt: %s", dec.RejectReason)
+	}
+	if _, kept := dec.KeptAttributes["cli.command.suggestion"]; kept {
+		t.Error("a suggestion over 128 bytes should be dropped")
 	}
 }
