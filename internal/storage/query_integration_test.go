@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -246,6 +247,16 @@ func TestListTraces_AttrOperators_Live(t *testing.T) {
 			AttrIn:       map[string][]string{"cli.ci_provider": {"jenkins", "gitlab_ci"}},
 		}, 1},
 		{"missing key matches nothing", Filters{AttrContains: map[string]string{"nope": "x"}}, 0},
+		{"regex match", Filters{AttrRegex: map[string]string{"cli.ci_provider": "^git(hub|lab)_"}}, 2},
+		{"regex non-match", Filters{AttrRegex: map[string]string{"cli.ci_provider": "^circleci$"}}, 0},
+		{"regex is case-sensitive", Filters{AttrRegex: map[string]string{"cli.ci_provider": "^GITHUB"}}, 0},
+		{"regex (?i) is case-insensitive", Filters{AttrRegex: map[string]string{"cli.ci_provider": "(?i)^GITHUB"}}, 1},
+		{"regex missing key matches nothing", Filters{AttrRegex: map[string]string{"nope": ".*"}}, 0},
+		{"regex AND in AND contains", Filters{
+			AttrRegex:    map[string]string{"cli.ci_provider": "_(actions|ci)$"},
+			AttrIn:       map[string][]string{"cli.ci_provider": {"github_actions", "gitlab_ci", "jenkins"}},
+			AttrContains: map[string]string{"cli.ci_provider": "lab"},
+		}, 1},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -258,5 +269,38 @@ func TestListTraces_AttrOperators_Live(t *testing.T) {
 				t.Fatalf("got %d rows, want %d", len(got), c.want)
 			}
 		})
+	}
+}
+
+// A malformed pattern must be reported as ErrInvalidRegex whether or not any
+// row would have been evaluated against it.
+func TestListTraces_InvalidRegex_Live(t *testing.T) {
+	dsn := os.Getenv("ARGVIO_TEST_DSN")
+	if dsn == "" {
+		t.Skip("ARGVIO_TEST_DSN not set; skipping live invalid regex test")
+	}
+	ctx := context.Background()
+	if err := MigrateUp(dsn); err != nil {
+		t.Fatalf("MigrateUp: %v", err)
+	}
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgxpool.New: %v", err)
+	}
+	defer pool.Close()
+
+	tenant := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO tenants (id, slug, name) VALUES ($1,$2,$3)`, tenant, tenant.String(), "t"); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	now := time.Now()
+	f := Filters{
+		Time:      TimeRange{From: now.Add(-time.Hour), To: now.Add(time.Hour)},
+		Limit:     100,
+		AttrRegex: map[string]string{"cli.ci_provider": "(unclosed"},
+	}
+	_, err = NewQueryBuilder(pool).ListTraces(ctx, TenantScope{tenantID: tenant}, f)
+	if !errors.Is(err, ErrInvalidRegex) {
+		t.Fatalf("ListTraces err = %v, want ErrInvalidRegex", err)
 	}
 }

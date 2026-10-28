@@ -118,7 +118,7 @@ can state it next to the numbers.
 
 ### 5. Prerequisite for slicing
 
-`attr.*`, `attr_contains.*` and `attr_in.*` apply to `/v1/traces` only; the
+`attr.*`, `attr_contains.*`, `attr_in.*` and `attr_regex.*` apply to `/v1/traces` only; the
 aggregate endpoints reject them with a 400 rather than ignore them. Install method (and any later attribute)
 can only slice charts if it is promoted to a rollup dimension. Plan: add
 `install_method` as a column on `installs` and join it into the new

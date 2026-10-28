@@ -2,12 +2,22 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// ErrInvalidRegex is returned when an AttrRegex pattern is not a valid
+// Postgres regular expression, so the HTTP layer can answer 400 rather than
+// 500.
+var ErrInvalidRegex = errors.New("storage: invalid regular expression")
+
+// pgInvalidRegularExpression is SQLSTATE invalid_regular_expression.
+const pgInvalidRegularExpression = "2201B"
 
 // QueryBuilder is the metrics server's entire read path. Every method takes
 // a TenantScope (see scope.go) so tenant isolation is structural, not
@@ -63,6 +73,14 @@ type Filters struct {
 	// keys semantics as Attrs.
 	AttrContains map[string]string
 	AttrIn       map[string][]string
+	// AttrRegex keeps rows whose attribute value matches the Postgres
+	// regular expression (the case-sensitive ~ operator; a leading (?i)
+	// makes a pattern case-insensitive). The pattern is a bound parameter,
+	// like every other attribute filter. It cannot use the GIN index on
+	// span_attributes, so the query stays driven by the tenant/time
+	// predicates; the HTTP layer bounds pattern length and count, and the
+	// pool's statement_timeout bounds execution.
+	AttrRegex map[string]string
 
 	Limit  int
 	Offset int
@@ -125,6 +143,15 @@ func (pb *predicateBuilder) addAttrContains(jsonCol string, attrs map[string]str
 	}
 }
 
+func (pb *predicateBuilder) addAttrRegex(jsonCol string, attrs map[string]string) {
+	for k, v := range attrs {
+		pb.args = append(pb.args, k, v)
+		keyIdx := len(pb.args) - 1
+		valIdx := len(pb.args)
+		pb.clauses = append(pb.clauses, fmt.Sprintf("(%s ->> $%d) ~ $%d", jsonCol, keyIdx, valIdx))
+	}
+}
+
 func (pb *predicateBuilder) addAttrIn(jsonCol string, attrs map[string][]string) {
 	for k, vs := range attrs {
 		pb.args = append(pb.args, k, vs)
@@ -183,6 +210,16 @@ func (q *QueryBuilder) ListTraces(ctx context.Context, scope TenantScope, f Filt
 	pb.addAttrEquals("span_attributes", f.Attrs)
 	pb.addAttrContains("span_attributes", f.AttrContains)
 	pb.addAttrIn("span_attributes", f.AttrIn)
+	pb.addAttrRegex("span_attributes", f.AttrRegex)
+
+	// Postgres compiles a regex only when it first meets a row, so a bad
+	// pattern over an empty result set would otherwise return 200 and one
+	// over data would fail mid-scan. Compile each pattern up front instead.
+	for _, pattern := range f.AttrRegex {
+		if err := q.checkRegex(ctx, pattern); err != nil {
+			return nil, err
+		}
+	}
 
 	limit := clampLimit(f.Limit)
 	limitPh := pb.nextPlaceholder(limit)
@@ -212,6 +249,22 @@ LIMIT %s OFFSET %s`, pb.where(), limitPh, offsetPh)
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// checkRegex asks Postgres whether pattern compiles, so an invalid pattern
+// surfaces as ErrInvalidRegex whatever the data. Go's regexp would accept a
+// different dialect (RE2 vs Postgres AREs), so it is not used here.
+func (q *QueryBuilder) checkRegex(ctx context.Context, pattern string) error {
+	var ignored bool
+	err := q.pool.QueryRow(ctx, "SELECT '' ~ $1", pattern).Scan(&ignored)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == pgInvalidRegularExpression {
+		return fmt.Errorf("%w: %s", ErrInvalidRegex, pgErr.Message)
+	}
+	if err != nil {
+		return fmt.Errorf("storage: check regex: %w", err)
+	}
+	return nil
 }
 
 // --- command stats (percentiles / error rate / frequency), off the ---

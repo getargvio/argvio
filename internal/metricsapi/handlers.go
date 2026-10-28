@@ -2,6 +2,7 @@ package metricsapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -35,6 +36,10 @@ func (s *Server) handleListTraces(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := s.withQuery(r.Context())
 	defer cancel()
 	rows, err := s.QB.ListTraces(ctx, scope, f)
+	if errors.Is(err, storage.ErrInvalidRegex) {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
 	if err != nil {
 		s.Log.Error("metricsapi: list traces failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")

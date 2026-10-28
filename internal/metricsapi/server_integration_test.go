@@ -397,7 +397,12 @@ func TestMetricsAPI_EndToEnd_Live(t *testing.T) {
 			{"/v1/metrics/error-rate?attr_contains.cli.ci_provider=github", http.StatusBadRequest},
 			{"/v1/metrics/version-footprint?attr_in.cli.ci_provider=github_actions", http.StatusBadRequest},
 			{"/v1/metrics/session-environment?dimension=shell&attr.cli.ci_provider=x", http.StatusBadRequest},
+			{"/v1/metrics/latency?attr_regex.cli.ci_provider=^github", http.StatusBadRequest},
 			{"/v1/traces?attr.cli.ci_provider=github_actions", http.StatusOK},
+			{"/v1/traces?attr_regex.cli.ci_provider=^git(hub|lab)_&attr_contains.cli.ci_provider=git", http.StatusOK},
+			{"/v1/traces?attr_regex.cli.ci_provider=(unclosed", http.StatusBadRequest},
+			{"/v1/traces?attr_regex.cli.ci_provider=" + strings.Repeat("a", 129), http.StatusBadRequest},
+			{"/v1/traces?attr_regex.a=x&attr_regex.b=x&attr_regex.c=x&attr_regex.d=x", http.StatusBadRequest},
 		}
 		for _, c := range cases {
 			resp := get(t, c.path+"&from="+url.QueryEscape(fromParam))
