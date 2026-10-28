@@ -367,6 +367,8 @@ func TestMetricsAPI_EndToEnd_Live(t *testing.T) {
 			{"/v1/metrics/session-sequences?min_length=0", http.StatusBadRequest},
 			{"/v1/metrics/session-sequences?min_length=6", http.StatusBadRequest},
 			{"/v1/metrics/session-sequences?min_length=two", http.StatusBadRequest},
+			{"/v1/metrics/latency-cold-warm?bucket=week", http.StatusOK},
+			{"/v1/metrics/latency-cold-warm?bucket=year", http.StatusBadRequest},
 			{"/v1/metrics/retries?window_seconds=120", http.StatusOK},
 			{"/v1/metrics/retries?window_seconds=0", http.StatusBadRequest},
 			{"/v1/metrics/retries?window_seconds=3601", http.StatusBadRequest},

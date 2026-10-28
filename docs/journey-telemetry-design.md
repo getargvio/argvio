@@ -214,6 +214,51 @@ name, runs in time order. A run **failed** when its exit code is non-zero.
   one failure, most failures first (`limit`/`offset` page them).
   `retry_rate` is `retried_count / failed_count`.
 
+### 8. Cold vs. warm latency
+
+The first run of a CLI is often much slower than later ones: caches are empty,
+config is created, and an upgrade invalidates what the last version built.
+`/v1/metrics/latency` mixes them. `GET /v1/metrics/latency-cold-warm` splits
+`cli.command.duration_ms` by whether the run was cold, from raw
+`cli.command.completed` logs joined to install state.
+
+- **Why server-derived** (rather than a client-reported `cli.start.kind`): it
+  needs no allowlist change or SDK release, so it works for every SDK version
+  already sending `cli.command.completed`. The cost is that it approximates
+  cold: it catches first run and first run after an upgrade, not a cold file
+  cache or a first run after reboot. A client marker is the only way to capture
+  those; it can be added later as a separate dimension without changing this
+  definition.
+- **Cold run**: the install's first completed command ever
+  (`installs.first_command_at`), or its first completed command at or after a
+  recorded version change (`install_version_changes.at`, upgrades and
+  downgrades). Both anchors are per install, not per command: the first run
+  after an upgrade is cold whatever command it was. One run can be the first
+  after several anchors; it is counted once. Everything else is **warm**.
+- **Anchors that never ran**: an install with a first-ever or post-change
+  anchor but no completed command since contributes no cold run. A run is
+  matched to its anchor by time only, so a version change followed by a second
+  one before any command makes the run after the second change the cold one
+  for both.
+- **Filters** (`command`, `cli_version`, `os`, `arch`, `is_ci`) choose which
+  runs are reported. They never change which are cold: filtering to `build`
+  does not turn a later `build` into the install's cold run. `exit_code` and
+  `attr.*` don't apply.
+- **Sample**: runs with a `cli.install_id`, a command name and a numeric
+  `cli.command.duration_ms`; negative durations are dropped. Each side reports
+  `run_count`, and percentiles (`percentile_agg` sketch, like `latency`) are
+  absent when it is 0. Cold groups are small by construction (one run per
+  install per anchor), so readers should check `run_count` first.
+- **Retention**: runs come from raw logs, so results are bounded by log
+  retention. A first run that aged out is not replaced by a later one: the
+  anchor's timestamp is kept, but the run is gone, so no cold sample.
+  Anonymous-tier runs carry no install id and are invisible
+  (`/v1/metrics/install-coverage`).
+- **Response**: time-bucketed (hour/day/week/month, default day), one row per
+  (bucket, command) with `cold` and `warm` objects; `limit`/`offset` page the
+  rows. Computed per bucket from the raw runs, so unlike `latency` there is no
+  rollup to merge: wide ranges cost a scan of the logs.
+
 ## Decisions (agreed)
 
 1. **Retention vs `installs`**: purge rows by `last_seen` against the
@@ -329,3 +374,7 @@ Steps 1 and 2 are independent and can be built in parallel.
   only): see "Sessions" below.
 - Remaining from this design, tracked as issues: typo detection (#21),
   repeated-failure and retry signals (#16).
+- Cold vs. warm latency (#18, done, unreleased, server side only):
+  `GET /v1/metrics/latency-cold-warm`, see "Cold vs. warm latency" above. No
+  migration and no SDK change: cold is derived from `installs`,
+  `install_version_changes` and the existing `cli.command.duration_ms`.

@@ -252,6 +252,76 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /v1/metrics/latency-cold-warm:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
+    get:
+      summary: Command latency for cold and warm runs, time-bucketed
+      description: |
+        p50/p95/p99 of `cli.command.duration_ms` per command, with cold and warm
+        runs reported separately.
+
+        A run is a `cli.command.completed` that carries a `cli.install_id`
+        (basic consent tier or above), a command name and a duration. It is
+        **cold** when it is the install's first completed command ever, or the
+        first completed command after a version change recorded for the install
+        (an upgrade or downgrade). Every other run is **warm**. The anchors are
+        per install, not per command: an install contributes at most one cold
+        run per anchor, whichever command that is. The filters choose which runs
+        are reported, not which are cold.
+
+        Each side carries `run_count`, the sample size behind its percentiles;
+        cold groups are small, so read it before trusting a cold percentile.
+        When it is 0 the percentiles are absent. Percentiles are estimated from
+        a sketch, like `/v1/metrics/latency`.
+
+        Runs are read from raw logs, so results are bounded by log retention. A
+        first run that has aged out is not replaced by a later one, so older
+        installs show no first-run cold sample. Anonymous-tier runs have no
+        install id and are invisible (see `/v1/metrics/install-coverage`).
+        `exit_code` and `attr.*` filters do not apply. `limit` and `offset` page
+        the (bucket, command) rows.
+      operationId: latencyColdWarm
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Command"
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/IsCI"
+        - $ref: "#/components/parameters/Bucket"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Per-bucket, per-command cold and warm latency.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ColdWarmLatencyPoint"
+              example:
+                data:
+                  - bucket: "2026-08-12T00:00:00Z"
+                    command_name: "deploy"
+                    cold: { run_count: 14, p50_ms: 912.0, p95_ms: 2210.5, p99_ms: 2480.1 }
+                    warm: { run_count: 469, p50_ms: 112.4, p95_ms: 301.8, p99_ms: 640.2 }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /v1/metrics/resource-usage:
     parameters:
       - $ref: "#/components/parameters/TenantHeader"
@@ -2158,6 +2228,25 @@ components:
         p95_ms: { type: number, nullable: true }
         p99_ms: { type: number, nullable: true }
       required: [bucket, command_name, invocation_count]
+
+    RunLatency:
+      type: object
+      description: Latency of one class of runs (cold or warm) of a command.
+      properties:
+        run_count: { type: integer, description: "Runs that reported a duration; the sample size behind the percentiles" }
+        p50_ms: { type: number }
+        p95_ms: { type: number }
+        p99_ms: { type: number }
+      required: [run_count]
+
+    ColdWarmLatencyPoint:
+      type: object
+      properties:
+        bucket: { type: string, format: date-time }
+        command_name: { type: string }
+        cold: { $ref: "#/components/schemas/RunLatency" }
+        warm: { $ref: "#/components/schemas/RunLatency" }
+      required: [bucket, command_name, cold, warm]
 
     UsageStats:
       type: object
