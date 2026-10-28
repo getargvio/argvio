@@ -1864,6 +1864,94 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /v1/metrics/unknown-commands:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
+    get:
+      summary: Attempts at commands that do not exist, and the command meant
+      description: |
+        How often users run a command that does not exist, and which known
+        command the CLI thought they meant. Two parts:
+
+        `series` is, per bucket, `attempt_count` (`cli.command.unknown` events),
+        `invocation_count` (command invocations, from the same rollups as
+        `/v1/metrics/command-frequency`) and `attempt_rate`, attempts divided by
+        invocations (0 when there were none). An attempt is not an invocation, so
+        the rate is not capped at 1. A bucket with either appears.
+
+        `suggestions` ranks the commands attempts were suggested for, most
+        attempts first (ties by name), top `limit`. **No user-typed text is ever
+        returned.** The suggestion is chosen by the client's CLI and the server
+        cannot check it, so it is only listed when it equals a command name the
+        tenant has reported (the set behind `/v1/meta/dimensions`). Every other
+        suggestion, and known ones past the top `limit`, are folded into `other`
+        with how many distinct suggestions that is. A command reported for the
+        first time in the last hour or so is not yet in the rollup behind that
+        set and folds too. `attempt_count` is every attempt in scope and
+        `suggested_attempts` those that carried a suggestion, so the difference
+        carried none (anonymous consent tier strips it; or no command was close
+        enough). `values` and `other` add up to `suggested_attempts`.
+
+        Attempts are read from raw logs, so results are bounded by log retention.
+        The `cli_version`, `os`, `arch` and `is_ci` filters apply to attempts and
+        invocations alike. `command` does not apply: an attempt has no command,
+        and narrowing only the invocations would skew the rate. `exit_code` does
+        not apply, `attr.*` filters are rejected with 400, and `offset` does not
+        apply.
+      operationId: unknownCommands
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/IsCI"
+        - name: bucket
+          in: query
+          required: false
+          description: >
+            Time-bucket granularity of series. week starts Monday; all
+            boundaries are UTC.
+          schema: { type: string, enum: [hour, day, week, month], default: day }
+        - name: limit
+          in: query
+          required: false
+          description: How many suggestions to list before folding the rest into other. Clamped server-side to MetricsConfig.max_result_page_size.
+          schema: { type: integer, minimum: 1, default: 100 }
+      responses:
+        "200":
+          description: The attempt rate and the most common suggestions.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/UnknownCommands"
+              example:
+                data:
+                  series:
+                    - { bucket: "2026-10-26T00:00:00Z", attempt_count: 41, invocation_count: 3980, attempt_rate: 0.0103 }
+                    - { bucket: "2026-10-27T00:00:00Z", attempt_count: 55, invocation_count: 4120, attempt_rate: 0.0133 }
+                  suggestions:
+                    attempt_count: 96
+                    suggested_attempts: 71
+                    values:
+                      - { suggestion: deploy, attempt_count: 38 }
+                      - { suggestion: deploy.push, attempt_count: 21 }
+                      - { suggestion: login, attempt_count: 9 }
+                    other: { suggestion_count: 2, attempt_count: 3 }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /v1/metrics/retries:
     parameters:
       - $ref: "#/components/parameters/TenantHeader"
@@ -2740,6 +2828,46 @@ components:
             session_count: { type: integer, description: Sessions behind them }
           required: [value_count, session_count]
       required: [dimension, session_count, reported_sessions, values, other]
+
+    UnknownCommandPoint:
+      type: object
+      properties:
+        bucket: { type: string, format: date-time }
+        attempt_count: { type: integer, description: Attempts at a command that does not exist }
+        invocation_count: { type: integer, description: Command invocations in the bucket }
+        attempt_rate: { type: number, description: attempt_count / invocation_count, 0 when there were no invocations. Not capped at 1. }
+      required: [bucket, attempt_count, invocation_count, attempt_rate]
+
+    UnknownCommands:
+      type: object
+      properties:
+        series:
+          type: array
+          items:
+            $ref: "#/components/schemas/UnknownCommandPoint"
+        suggestions:
+          type: object
+          properties:
+            attempt_count: { type: integer, description: Every attempt in scope }
+            suggested_attempts: { type: integer, description: Attempts that carried a suggestion }
+            values:
+              type: array
+              description: Suggestions that are command names the tenant has reported, top limit, most attempts first.
+              items:
+                type: object
+                properties:
+                  suggestion: { type: string }
+                  attempt_count: { type: integer }
+                required: [suggestion, attempt_count]
+            other:
+              type: object
+              description: Suggestions that are not a reported command name, and known ones past the limit. Both are 0 when nothing was folded.
+              properties:
+                suggestion_count: { type: integer, description: Distinct suggestions folded }
+                attempt_count: { type: integer, description: Attempts behind them }
+              required: [suggestion_count, attempt_count]
+          required: [attempt_count, suggested_attempts, values, other]
+      required: [series, suggestions]
 
     RetryPoint:
       type: object

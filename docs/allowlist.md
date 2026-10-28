@@ -117,7 +117,7 @@ dropped.
 | Tier | Adds |
 |---|---|
 | `anonymous` | Aggregate-only shape: `cli.command.name`, `cli.command.exit_code`, `cli.command.duration_ms`, `cli.version`, `cli.os`, `cli.arch`, `cli.is_ci`, vendor counters (`cli.counter.name`, `cli.counter.label`; **see the warning under "Vendor counters"**) and vendor durations (`cli.measure.name`, `cli.measure.label`; **see "Vendor measures"**). |
-| `basic` | Opaque `cli.session_id`/`cli.install_id` (random UUIDs, not identity-linked), `cli.flag.names` (names only, not values), shell/terminal metadata, the coarse `cli.error.type` category and the vendor's finer `cli.error.reason` (see below), and process resource usage on the command span (`cli.process.peak_rss_bytes`, `cli.process.cpu_time_ms`), and build footprint on `cli.session.started` (`cli.binary.size_bytes`, `cli.startup.duration_ms`), and the environment of a session on `cli.session.started` (`cli.shell`, `cli.terminal`, `cli.stdout.is_tty`, `cli.runtime.name`/`version`, `cli.config.customized_count`, `cli.auth.state`; `GET /v1/metrics/session-environment`). |
+| `basic` | Opaque `cli.session_id`/`cli.install_id` (random UUIDs, not identity-linked), `cli.flag.names` (names only, not values), shell/terminal metadata, the coarse `cli.error.type` category and the vendor's finer `cli.error.reason` (see below), and process resource usage on the command span (`cli.process.peak_rss_bytes`, `cli.process.cpu_time_ms`), and build footprint on `cli.session.started` (`cli.binary.size_bytes`, `cli.startup.duration_ms`), and the environment of a session on `cli.session.started` (`cli.shell`, `cli.terminal`, `cli.stdout.is_tty`, `cli.runtime.name`/`version`, `cli.config.customized_count`, `cli.auth.state`; `GET /v1/metrics/session-environment`)., and the nearest known command to a mistyped one on `cli.command.unknown` (`cli.command.suggestion`; see "Unknown commands"; the event itself is accepted at `anonymous` as a bare count). |
 | `full` | Error diagnostics (`cli.error.message`/`stacktrace`), the full allowlisted attribute set for allowed events. |
 | `optin_plus` | Fields marked `sensitive: true` explicitly: `cli.args.raw`, `cli.env.vars`, `cli.host.name`, `cli.user.name`, `cli.path.raw`. Only accepted if **both** the tenant's ceiling is `optin_plus` and the record itself declares it. |
 
@@ -277,6 +277,63 @@ bucket, and the percentile is interpolated inside the bucket it falls in
 the bucket is narrow (a p95 of 700 ms means somewhere in 500-1000 ms) and
 clamped to the observed min and max. Changing the bounds takes a new
 migration, since the rollups have one column per bucket.
+
+## Unknown commands (`cli.command.unknown`)
+
+> **Warning: a mistyped command is arbitrary user input.** It can be a typo of
+> a command, but also a pasted token, a path, or a sentence. **Never send what
+> the user typed, or any part or transformation of it** (a prefix, a hash, a
+> length, the flags that followed it). The server cannot tell a command name
+> from typed text, so keeping it out is the SDK's job; the server's guards below
+> are a second line, not a licence.
+
+`cli.command.unknown` is the log event for one attempt to run a command that
+does not exist. It is for the SDK or the CLI's command framework to emit when
+its own dispatcher finds no match, and it has no counterpart in the
+`cli.command.*` spans or in `cli.command.invocations`: an attempt is not an
+invocation.
+
+**What to send**, and nothing else:
+
+| Attribute | Tier | Rule |
+|---|---|---|
+| `cli.command.suggestion` | `basic` | Optional. The nearest **known** command name, taken from the CLI's own command table (e.g. `deploy.push`), at most 128 bytes. Omit it when no command is close enough. |
+| `cli.version`, `cli.os`, `cli.arch`, `cli.is_ci` | `anonymous` | As on other events. |
+| `cli.analytics.tier` | | As on every record. |
+
+**What not to send.** `cli.command.name` is not allowed on this event (it is
+the name of a command that ran), nor are `cli.flag.names`, `cli.args.raw`,
+`cli.help.flag` or any error attribute: the server drops them. Leave the OTLP
+log body empty. The event is marked `drop_body: true` in the schema, so the
+body is discarded at every tier, `full` and `optin_plus` included, where other
+events keep it.
+
+**Anonymous tier is the counter.** At `anonymous` the suggestion is stripped
+(it is `basic`), and what remains is a bare attempt, which still counts toward
+the attempt rate. There is no separate counter metric: emit the event at the
+consent tier the user is at. A CLI that cannot compute a suggestion emits it
+without one.
+
+What the server enforces:
+
+1. **Allowlist and tier.** Only the attributes above are kept. The
+   suggestion is stripped below `basic` and dropped when over 128 bytes (the
+   attempt is kept). The body is always dropped.
+2. **Results never contain a suggestion the tenant has not reported.** The
+   suggestion is stored as sent, so a client that puts typed text in it gets it
+   stored (in `log_attributes`, like any attribute) but never returned.
+   `GET /v1/metrics/unknown-commands` lists a suggestion only when it equals a
+   `command_name` the tenant has reported, the set behind
+   `GET /v1/meta/dimensions`; every other one is counted in `other` as a number
+   of attempts and of distinct suggestions, never as text. Known commands past
+   the `limit` fold into `other` too, so the response is bounded.
+3. **Rate.** The endpoint reports attempts per bucket next to the command
+   invocations of the same bucket (the command stats rollups), and their ratio.
+
+Because the second guard compares with commands the tenant has reported, make
+suggestions the same strings as `cli.command.name` (the same dotted path), or
+they are folded. See `docs/journey-telemetry-design.md` "Unknown commands" for
+the reasoning.
 
 ## Worked example: adding a new supported log event
 

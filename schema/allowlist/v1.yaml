@@ -308,6 +308,20 @@ attributes:
     min_tier: basic
     sensitive: false
 
+  cli.command.suggestion:
+    type: string
+    max_length: 128
+    min_tier: basic
+    sensitive: false
+    description: >
+      On cli.command.unknown: the nearest KNOWN command name to what the user
+      typed, e.g. "deploy.push", chosen by the CLI from its own command table.
+      Never the typed text, a fragment of it or anything derived from it
+      (docs/allowlist.md "Unknown commands"). Omit when no command is close
+      enough. The server cannot check it at ingest, so results only name
+      suggestions that match a command name the tenant has reported and fold
+      the rest into "other".
+
   # Vendor-defined counters (cli.counter). WARNING: anonymous tier, so these
   # are reported from CI and with no install identifier. Name and label must
   # be fixed identifiers chosen in the CLI's code, never user input, file
@@ -551,6 +565,20 @@ logs:
       - cli.arch
       - cli.session_id
       - cli.install_id
+
+  # A command that does not exist was invoked. Deliberately NOT allowing
+  # cli.command.name, cli.flag.names or cli.args.raw here: whatever the user
+  # typed must have nowhere to land. drop_body discards the record body, which
+  # full tier and above would otherwise store. At anonymous tier the
+  # suggestion is stripped, which leaves a bare attempt count.
+  - event_name: cli.command.unknown
+    drop_body: true
+    allowed_attributes:
+      - cli.command.suggestion
+      - cli.version
+      - cli.os
+      - cli.arch
+      - cli.is_ci
 
   - event_name: cli.help.viewed
     allowed_attributes:

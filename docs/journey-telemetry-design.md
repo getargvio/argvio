@@ -309,6 +309,62 @@ with the required `dimension` param:
   rejected with a 400. No
   migration.
 
+### 10. Unknown commands
+
+Users mistype commands, or run ones that do not exist. `cli.command.unknown`
+is the log event for one attempt, with the nearest known command as the only
+content. `GET /v1/metrics/unknown-commands` reports how often it happens and
+what people probably meant.
+
+- **The constraint**: a mistyped command is arbitrary user input (a pasted
+  token, a path), so the design guarantees no typed text is accepted *or
+  returned*. The raw text has no allowlisted attribute anywhere.
+- **Allowlist**: one new attribute, `cli.command.suggestion` (`string`, 128
+  bytes, `basic` tier, not sensitive), allowed on the new `cli.command.unknown`
+  event together with `cli.version`/`os`/`arch`/`is_ci` and nothing else.
+  `cli.command.name`, `cli.flag.names`, `cli.args.raw` and `cli.help.flag` are
+  deliberately not allowed on it, so a client has nowhere to put what was
+  typed.
+- **Body**: log bodies are stored at `full` tier and above, which is the other
+  place typed text could land. A new `drop_body` flag on a log event
+  definition (`LogDef.DropBody`) discards the body at every tier; this event
+  sets it. A schema flag rather than a hard-coded event name, so it stays a
+  data change like the rest of the allowlist.
+- **Anonymous-tier counter?** Not as a separate metric. The event at
+  `anonymous` tier loses its `basic` suggestion and is a bare attempt, which is
+  exactly a counter with no suggestion, from the same code path. A second
+  metric would double count what a CLI emits at `basic`, or need the SDK to
+  emit both.
+- **Guard against a misbehaving client**: the server cannot know a CLI's
+  command set, so the suggestion is checked **at read time** against the
+  `command_name` values the tenant has reported, the set behind
+  `/v1/meta/dimensions` (the daily command-stats rollup, no time filter).
+  Matching ones are listed; every other one, and known ones past the top-K, are
+  folded into `other` as counts (`attempt_count`, distinct `suggestion_count`),
+  never as text. Checked at read time rather than ingest because the set
+  changes (a new command is reported later than a typo of it is suggested), so
+  an ingest check would drop real suggestions for good. Cost: unrecognized text
+  is stored in `log_attributes` as sent (bounded to 128 bytes, tenant-scoped,
+  expired with log retention); only the response is guaranteed free of it. A
+  command seen for the first time in the last hour or so is not in the rollup
+  yet and folds until it is.
+- **Rate**: `attempt_count / invocation_count` per bucket (hour, day, week,
+  month; default day). Invocations come from the command stats rollups the
+  other command endpoints use, attempts from raw logs, so the attempts side is
+  bounded by log retention. An attempt is not an invocation, so the rate can
+  exceed 1 in principle. A bucket with either shows, rate 0 when there were no
+  invocations.
+- **Filters**: `cli_version`, `os`, `arch` and `is_ci` apply to both sides.
+  `command` does not: an attempt has no command, and narrowing only the
+  invocations would turn the rate into nonsense. `attr.*` is rejected with a
+  400. `limit` caps the suggestions; `offset` does not apply.
+- **Not reported**: `attempt_count` is every attempt, `suggested_attempts`
+  those with a suggestion, so the difference is anonymous tier or no close
+  command. `values` and `other` add up to `suggested_attempts`.
+- **SDK contract**: `docs/allowlist.md` "Unknown commands" says what to send and
+  what not to. Detecting the miss needs the CLI framework, so it is separate
+  work in argvio-go#5 and argvio-node#8. No migration.
+
 ## Decisions (agreed)
 
 1. **Retention vs `installs`**: purge rows by `last_seen` against the
@@ -422,8 +478,8 @@ Steps 1 and 2 are independent and can be built in parallel.
     only (`/v1/metrics/install-coverage`).
 - Session length and command sequences (#14, done, unreleased, server side
   only): see "Sessions" below.
-- Remaining from this design, tracked as issues: typo detection (#21),
-  repeated-failure and retry signals (#16).
+- Remaining from this design, tracked as issues: repeated-failure and retry
+  signals (#16).
 - Cold vs. warm latency (#18, done, unreleased, server side only):
   `GET /v1/metrics/latency-cold-warm`, see "Cold vs. warm latency" above. No
   migration and no SDK change: cold is derived from `installs`,
@@ -432,3 +488,7 @@ Steps 1 and 2 are independent and can be built in parallel.
   `GET /v1/metrics/session-environment`, see "Session environment" above. The
   allowlist accepts the new attributes now; the SDK work is tracked in
   argvio-go#6/#7 and argvio-node#9/#10. No migration.
+- Unknown commands (#21, done, unreleased, server side only):
+  `GET /v1/metrics/unknown-commands`, see "Unknown commands" above. The
+  allowlist accepts `cli.command.unknown` and `cli.command.suggestion` now; the
+  SDK work is tracked in argvio-go#5 and argvio-node#8. No migration.

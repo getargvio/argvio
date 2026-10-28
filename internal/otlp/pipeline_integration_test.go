@@ -968,3 +968,75 @@ func TestProcessLogs_AnonymousTierTracksNoDiscoveries_Live(t *testing.T) {
 		t.Errorf("stored activation events = %d (%v), want 1: the event itself is still accepted", n, err)
 	}
 }
+
+// An unknown-command attempt keeps its suggestion from basic tier up, loses it
+// at anonymous tier, and never stores a record body, which full tier would
+// otherwise keep: it is the one other place typed text could land.
+func TestProcessLogs_UnknownCommand_Live(t *testing.T) {
+	pipeline, pool, tenantID := setupPipeline(t, "full", consent.ModeStrip)
+	ctx := context.Background()
+	now := time.Now()
+
+	// Each record is labelled by its cli.version so it can be found again.
+	ld := plog.NewLogs()
+	add := func(tier, label string, body string, extra map[string]string) {
+		rl := ld.ResourceLogs().AppendEmpty()
+		rl.Resource().Attributes().PutStr("cli.analytics.tier", tier)
+		rec := rl.ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+		rec.SetEventName("cli.command.unknown")
+		rec.SetTimestamp(pcommon.NewTimestampFromTime(now))
+		rec.Attributes().PutStr("cli.version", label)
+		rec.Attributes().PutStr("cli.command.suggestion", "deploy")
+		if body != "" {
+			rec.Body().SetStr(body)
+		}
+		for k, v := range extra {
+			rec.Attributes().PutStr(k, v)
+		}
+	}
+	add("basic", "basic", "", nil)
+	add("full", "full-body", "depoly --token hunter2", map[string]string{"cli.command.name": "depoly", "cli.args.raw": "depoly"})
+	add("anonymous", "anonymous", "", nil)
+	// The same body on another event is still kept at full tier.
+	rl := ld.ResourceLogs().AppendEmpty()
+	rl.Resource().Attributes().PutStr("cli.analytics.tier", "full")
+	rec := rl.ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+	rec.SetEventName("cli.error.raised")
+	rec.SetTimestamp(pcommon.NewTimestampFromTime(now))
+	rec.Attributes().PutStr("cli.version", "other-event")
+	rec.Attributes().PutStr("cli.error.type", "network")
+	rec.Body().SetStr("connection refused")
+
+	if accepted, rejected, sample, err := pipeline.ProcessLogs(ctx, ld); err != nil || accepted != 4 || rejected != 0 {
+		t.Fatalf("ProcessLogs: accepted=%d rejected=%d sample=%q err=%v, want 4/0", accepted, rejected, sample, err)
+	}
+	read := func(label string) (suggestion, command, args, body *string) {
+		t.Helper()
+		err := pool.QueryRow(ctx, `SELECT log_attributes ->> 'cli.command.suggestion', command_name, log_attributes ->> 'cli.args.raw', body
+			FROM logs WHERE tenant_id=$1 AND cli_version=$2`, tenantID, label).Scan(&suggestion, &command, &args, &body)
+		if err != nil {
+			t.Fatalf("read %s: %v", label, err)
+		}
+		return
+	}
+
+	if s, _, _, _ := read("basic"); s == nil || *s != "deploy" {
+		t.Errorf("basic: suggestion = %v, want deploy", s)
+	}
+	if s, _, _, _ := read("anonymous"); s != nil {
+		t.Errorf("anonymous: suggestion = %q, want it stripped", *s)
+	}
+	s, command, args, body := read("full-body")
+	if s == nil || *s != "deploy" {
+		t.Errorf("full: suggestion = %v, want deploy", s)
+	}
+	if command != nil || args != nil {
+		t.Errorf("full: command_name = %v, args = %v, want typed text dropped", command, args)
+	}
+	if body != nil {
+		t.Errorf("full: body = %q, want it dropped for cli.command.unknown", *body)
+	}
+	if _, _, _, body := read("other-event"); body == nil || *body != "connection refused" {
+		t.Errorf("other event: body = %v, want it kept at full tier", body)
+	}
+}

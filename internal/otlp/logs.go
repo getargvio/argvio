@@ -19,7 +19,7 @@ import (
 // record's effective consent tier is "full" or "optin_plus" — below that it
 // is nulled out unconditionally, even if the client sent it, since body
 // text is exactly the kind of free-form content the lower tiers exist to
-// exclude (docs/allowlist.md).
+// exclude (docs/allowlist.md). An event marked drop_body never keeps one.
 func (p *Pipeline) ProcessLogs(ctx context.Context, ld plog.Logs) (accepted, rejected int64, rejectionSample string, err error) {
 	if !p.Schema.IsKnownSignalType("logs") {
 		return 0, 0, "", ErrUnknownSignalType
@@ -109,7 +109,7 @@ func (p *Pipeline) buildLogRow(rec plog.LogRecord, scope pcommon.Instrumentation
 	minRank, _ := p.Schema.TierRank(decision.EffectiveTier)
 	fullRank, _ := p.Schema.TierRank("full")
 	var body *string
-	if minRank >= fullRank {
+	if logDef, _ := p.Schema.LogEventByName(rec.EventName()); minRank >= fullRank && !logDef.DropBody {
 		if s := rec.Body().AsString(); s != "" {
 			body = &s
 		}

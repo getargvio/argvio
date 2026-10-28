@@ -512,3 +512,50 @@ func TestSessionEnvironmentAttributes(t *testing.T) {
 		}
 	}
 }
+
+// cli.command.unknown reports an attempt at a command that does not exist.
+// The only free-ish text it may carry is the suggestion, a known command name,
+// so nothing that could hold what the user typed is allowed on it.
+func TestUnknownCommandEvent(t *testing.T) {
+	s := loadRealSchema(t)
+	ev, ok := s.LogEventByName("cli.command.unknown")
+	if !ok {
+		t.Fatal("expected cli.command.unknown to be defined")
+	}
+	if !ev.DropBody {
+		t.Error("cli.command.unknown should drop the record body")
+	}
+	if !slices.Contains(ev.AllowedAttributes, "cli.command.suggestion") {
+		t.Error("cli.command.unknown should allow cli.command.suggestion")
+	}
+	for _, a := range []string{"cli.command.name", "cli.flag.names", "cli.args.raw", "cli.error.message", "cli.path.raw", "cli.help.flag"} {
+		if slices.Contains(ev.AllowedAttributes, a) {
+			t.Errorf("cli.command.unknown must not allow %s: it could hold what the user typed", a)
+		}
+	}
+
+	def, ok := s.AttrDefFor("cli.command.suggestion")
+	if !ok {
+		t.Fatal("cli.command.suggestion not defined")
+	}
+	basic, _ := s.TierRank("basic")
+	if rank, _ := s.TierRank(def.MinTier); def.Type != AttrString || def.Sensitive || rank != basic || def.MaxLength != 128 {
+		t.Errorf("cli.command.suggestion = %+v, want a non-sensitive basic-tier string of at most 128", def)
+	}
+	if err := CheckAttribute(def, strings.Repeat("a", 128)); err != nil {
+		t.Errorf("a 128-byte suggestion should be accepted: %v", err)
+	}
+	if err := CheckAttribute(def, strings.Repeat("a", 129)); err == nil {
+		t.Error("a 129-byte suggestion should be rejected")
+	}
+
+	// No other event may carry the suggestion, or it would escape the guard.
+	for _, l := range s.Logs {
+		if l.EventName != "cli.command.unknown" && slices.Contains(l.AllowedAttributes, "cli.command.suggestion") {
+			t.Errorf("%s should not allow cli.command.suggestion", l.EventName)
+		}
+		if l.EventName != "cli.command.unknown" && l.DropBody {
+			t.Errorf("%s should not drop its body", l.EventName)
+		}
+	}
+}

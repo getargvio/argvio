@@ -88,6 +88,11 @@ type SpanDef struct {
 type LogDef struct {
 	EventName         string   `yaml:"event_name"`
 	AllowedAttributes []string `yaml:"allowed_attributes"`
+	// DropBody discards the record body at every tier. The body is free text
+	// that full tier and above would otherwise persist, so an event whose
+	// content must be an identifier from the CLI's code, never user input,
+	// sets it.
+	DropBody bool `yaml:"drop_body"`
 }
 
 // Schema is the fully parsed, validated allowlist/tier definition.
