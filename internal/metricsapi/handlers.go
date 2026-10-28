@@ -302,6 +302,38 @@ func (s *Server) handleRetries(w http.ResponseWriter, r *http.Request) {
 	}})
 }
 
+// handleSessionEnvironment serves /v1/metrics/session-environment. The
+// required `dimension` param picks the session fact to take the distribution
+// of. It isn't time-bucketed (one distribution over the whole window), so it
+// can't use serveBucketed.
+func (s *Server) handleSessionEnvironment(w http.ResponseWriter, r *http.Request) {
+	scope, ok := scopeFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "missing tenant scope")
+		return
+	}
+	f, err := s.parseFilters(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	dim, ok := storage.ParseEnvironmentDimension(r.URL.Query().Get("dimension"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid_request",
+			"dimension must be one of "+storage.EnvironmentDimensionNames())
+		return
+	}
+	ctx, cancel := s.withQuery(r.Context())
+	defer cancel()
+	dist, err := s.QB.SessionEnvironment(ctx, scope, f, dim)
+	if err != nil {
+		s.Log.Error("metricsapi: session environment failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{responseDataKey: dist})
+}
+
 // handleVersionFootprint serves /v1/metrics/version-footprint. It isn't
 // time-bucketed (one row per CLI version over the whole window, ordered by
 // version rather than by time), so it can't use serveBucketed.

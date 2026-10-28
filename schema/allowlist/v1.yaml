@@ -204,6 +204,53 @@ attributes:
     min_tier: basic
     sensitive: false
 
+  cli.stdout.is_tty:
+    type: bool
+    min_tier: basic
+    sensitive: false
+    description: >
+      Whether the CLI's standard output is a terminal (true) or piped or
+      redirected (false). Sent on cli.session.started.
+
+  cli.runtime.name:
+    type: string
+    max_length: 32
+    min_tier: basic
+    sensitive: false
+    description: >
+      Language runtime the CLI runs on, e.g. "go" or "node". A short name from
+      the SDK or the vendor, never a path. Sent on cli.session.started.
+
+  cli.runtime.version:
+    type: string
+    max_length: 32
+    min_tier: basic
+    sensitive: false
+    description: >
+      Version of cli.runtime.name, e.g. "1.22.1". The version only, never a
+      path or a build string with a host name in it. Reported with its runtime:
+      a version alone is not aggregated. Sent on cli.session.started.
+
+  cli.config.customized_count:
+    type: int
+    min_tier: basic
+    sensitive: false
+    description: >
+      How many configuration settings differ from their defaults, as a
+      measure of how customized the install is. A count only: never the
+      settings' names or values. Negative values are treated as not reported
+      when aggregated. Sent on cli.session.started.
+
+  cli.auth.state:
+    type: string
+    enum: [authenticated, anonymous, unknown]
+    min_tier: basic
+    sensitive: false
+    description: >
+      Whether the CLI's user is signed in to the vendor's own service,
+      determined by the vendor's CLI, not the SDK. "unknown" when the CLI
+      cannot tell. Any other value is dropped. Sent on cli.session.started.
+
   cli.error.type:
     type: string
     max_length: 128
@@ -531,6 +578,11 @@ logs:
       - cli.is_ci
       - cli.shell
       - cli.terminal
+      - cli.stdout.is_tty
+      - cli.runtime.name
+      - cli.runtime.version
+      - cli.config.customized_count
+      - cli.auth.state
 
   - event_name: cli.feature.activated
     allowed_attributes:
