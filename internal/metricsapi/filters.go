@@ -7,13 +7,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/getargvio/argvio/internal/storage"
 )
 
 // parseFilters builds a storage.Filters for an aggregate endpoint. Those read
 // rollups and event queries that carry no attribute columns, so attr.*,
-// attr_contains.* and attr_in.* are rejected rather than silently ignored,
+// attr_contains.*, attr_in.* and attr_regex.* are rejected rather than silently ignored,
 // which would return unfiltered numbers that look filtered.
 func (s *Server) parseFilters(r *http.Request) (storage.Filters, error) {
 	if key := firstAttrParam(r.URL.Query()); key != "" {
@@ -40,8 +41,17 @@ func firstAttrParam(q map[string][]string) string {
 func isAttrParam(key string) bool {
 	return strings.HasPrefix(key, "attr.") ||
 		strings.HasPrefix(key, "attr_contains.") ||
-		strings.HasPrefix(key, "attr_in.")
+		strings.HasPrefix(key, "attr_in.") ||
+		strings.HasPrefix(key, "attr_regex.")
 }
+
+// Bounds on attr_regex.* so one request cannot make /v1/traces evaluate an
+// arbitrarily large or numerous set of patterns per row. Execution time is
+// bounded separately by the query and statement timeouts.
+const (
+	maxAttrRegexLen     = 128 // characters per pattern
+	maxAttrRegexFilters = 3   // patterns per request
+)
 
 // parseFiltersWithAttrs builds a storage.Filters from query parameters,
 // enforcing MaxTimeRangeSpan (the "no 5-year raw scan" guard from
@@ -82,6 +92,7 @@ func (s *Server) parseFiltersWithAttrs(r *http.Request) (storage.Filters, error)
 	f.Attrs = map[string]string{}
 	f.AttrContains = map[string]string{}
 	f.AttrIn = map[string][]string{}
+	f.AttrRegex = map[string]string{}
 	for key, vals := range q {
 		switch {
 		case strings.HasPrefix(key, "attr."):
@@ -98,7 +109,19 @@ func (s *Server) parseFiltersWithAttrs(r *http.Request) (storage.Filters, error)
 			if in := multiParam(q, key); len(in) > 0 {
 				f.AttrIn[strings.TrimPrefix(key, "attr_in.")] = in
 			}
+		case strings.HasPrefix(key, "attr_regex."):
+			// An empty pattern would match every row that has the key, so
+			// treat it as absent, like attr_contains.
+			if len(vals) > 0 && vals[0] != "" {
+				if n := utf8.RuneCountInString(vals[0]); n > maxAttrRegexLen {
+					return f, fmt.Errorf("%s must be at most %d characters (got %d)", key, maxAttrRegexLen, n)
+				}
+				f.AttrRegex[strings.TrimPrefix(key, "attr_regex.")] = vals[0]
+			}
 		}
+	}
+	if len(f.AttrRegex) > maxAttrRegexFilters {
+		return f, fmt.Errorf("at most %d attr_regex.* filters are allowed per request (got %d)", maxAttrRegexFilters, len(f.AttrRegex))
 	}
 
 	limit := s.DefaultResultPageSize

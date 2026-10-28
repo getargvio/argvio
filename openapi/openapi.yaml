@@ -28,8 +28,8 @@ info:
     named none; **503** means the identity provider is unreachable, which says
     nothing about the token.
 
-    **Attribute filters.** `attr.*`, `attr_contains.*` and `attr_in.*` apply
-    to `GET /v1/traces` only. Every `/v1/metrics/*` endpoint reads rollups
+    **Attribute filters.** `attr.*`, `attr_contains.*`, `attr_in.*` and
+    `attr_regex.*` apply to `GET /v1/traces` only. Every `/v1/metrics/*` endpoint reads rollups
     or event queries that carry no attribute columns, so it rejects these
     parameters with **400 `invalid_request`** naming the first offending
     parameter, rather than returning unfiltered numbers that look filtered.
@@ -38,7 +38,7 @@ info:
     `/v1/metrics/*` endpoint, where they were silently ignored, now get a 400
     and must drop them (or slice with `/v1/traces`).
 
-    | Endpoint group | `attr.*`, `attr_contains.*`, `attr_in.*` |
+    | Endpoint group | `attr.*`, `attr_contains.*`, `attr_in.*`, `attr_regex.*` |
     | --- | --- |
     | `GET /v1/traces` | applied |
     | all `GET /v1/metrics/*` | rejected with 400 |
@@ -143,6 +143,7 @@ paths:
         - $ref: "#/components/parameters/AttrFilter"
         - $ref: "#/components/parameters/AttrContainsFilter"
         - $ref: "#/components/parameters/AttrInFilter"
+        - $ref: "#/components/parameters/AttrRegexFilter"
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Offset"
       responses:
@@ -2373,6 +2374,26 @@ components:
         `attr_in.cli.ci_provider=github_actions,gitlab_ci`. Accepts repeated
         or comma-separated values (OR within the key); ANDed across keys and
         with every other filter. Bound as a query parameter server-side.
+      schema: { type: string }
+    AttrRegexFilter:
+      name: attr_regex.*
+      in: query
+      required: false
+      description: >
+        **`/v1/traces` only**; aggregate `/v1/metrics/*` endpoints reject it
+        with 400. Regular-expression filter against a record-level attribute,
+        e.g. `attr_regex.cli.ci_provider=^git(hub|lab)_`. Uses the Postgres
+        `~` operator (POSIX advanced regular expressions, not RE2),
+        case-sensitive and unanchored; start the pattern with `(?i)` for a
+        case-insensitive match. A row without the attribute never matches.
+        An empty value is ignored. Patterns are limited to 128 characters and
+        a request may carry at most 3 `attr_regex.*` filters; exceeding
+        either limit, or sending a pattern Postgres cannot compile, returns
+        **400 `invalid_request`**. Regex predicates cannot use the attribute
+        index, so the query is still driven by the tenant and time predicates
+        and bounded by the query timeout. ANDed with every other filter,
+        including the other attribute operators on the same key. Bound as a
+        query parameter server-side, like `attr.*`.
       schema: { type: string }
     Limit:
       name: limit
