@@ -28,6 +28,21 @@ info:
     named none; **503** means the identity provider is unreachable, which says
     nothing about the token.
 
+    **Attribute filters.** `attr.*`, `attr_contains.*` and `attr_in.*` apply
+    to `GET /v1/traces` only. Every `/v1/metrics/*` endpoint reads rollups
+    or event queries that carry no attribute columns, so it rejects these
+    parameters with **400 `invalid_request`** naming the first offending
+    parameter, rather than returning unfiltered numbers that look filtered.
+    `/v1/meta/dimensions`, `/v1/tenants` and `/healthz` take no filters.
+    *Behaviour change:* callers that previously sent attribute filters to a
+    `/v1/metrics/*` endpoint, where they were silently ignored, now get a 400
+    and must drop them (or slice with `/v1/traces`).
+
+    | Endpoint group | `attr.*`, `attr_contains.*`, `attr_in.*` |
+    | --- | --- |
+    | `GET /v1/traces` | applied |
+    | all `GET /v1/metrics/*` | rejected with 400 |
+
     This spec covers the `metrics` server only. The `public` server is a
     spec-compliant OTLP receiver (gRPC + HTTP), documented by reference to
     the OpenTelemetry Protocol specification in docs/architecture.md rather
@@ -279,7 +294,7 @@ paths:
         first run that has aged out is not replaced by a later one, so older
         installs show no first-run cold sample. Anonymous-tier runs have no
         install id and are invisible (see `/v1/metrics/install-coverage`).
-        `exit_code` and `attr.*` filters do not apply. `limit` and `offset` page
+        `exit_code` does not apply and `attr.*` filters are rejected with 400. `limit` and `offset` page
         the (bucket, command) rows.
       operationId: latencyColdWarm
       parameters:
@@ -712,7 +727,7 @@ paths:
         and timeout views. Counts only commands whose SDK emitted that event,
         which requires a high enough consent tier, so totals are lower than
         /v1/metrics/error-rate. Reads raw logs, so it is bounded by log
-        retention. exit_code and attr.* filters do not apply.
+        retention. exit_code does not apply and attr.* filters are rejected with 400.
 
 
         With group_by=reason, each category is further split by
@@ -837,7 +852,8 @@ paths:
 
         Reads raw logs, so it is bounded by log retention. first_seen and
         last_seen are within the requested time range. trend omits buckets
-        without events. exit_code and attr.* filters do not apply.
+        without events. exit_code does not apply and attr.* filters are rejected
+        with 400.
       operationId: errorFingerprints
       parameters:
         - $ref: "#/components/parameters/From"
@@ -921,8 +937,8 @@ paths:
         logs, bounded by log retention) and can be non-zero for a command
         with no invocations. interrupted_count counts invocations that exited
         130 (SIGINT, i.e. Ctrl+C); it is a lower bound, since a CLI is not
-        required to exit 130 when interrupted. exit_code and attr.* filters do
-        not apply.
+        required to exit 130 when interrupted. exit_code does not apply and
+        attr.* filters are rejected with 400.
       operationId: friction
       parameters:
         - $ref: "#/components/parameters/From"
@@ -1657,8 +1673,9 @@ paths:
         are bounded by log retention, and are clipped to the time window: a session
         running across from or to is measured by the events inside. The command,
         cli_version, os, arch and is_ci filters select the events sessions are
-        built from (command=deploy measures bursts of deploy runs); exit_code and
-        attr filters do not apply. limit and offset do not apply.
+        built from (command=deploy measures bursts of deploy runs); exit_code does
+        not apply and attr filters are rejected with 400. limit and offset do
+        not apply.
       operationId: sessionLength
       parameters:
         - $ref: "#/components/parameters/From"
@@ -1720,7 +1737,7 @@ paths:
         seen, and sessions are derived from raw logs, so they are bounded by log
         retention and clipped to the time window. The command, cli_version, os,
         arch and is_ci filters select the events sessions are built from; exit_code
-        and attr filters do not apply.
+        does not apply and attr filters are rejected with 400.
       operationId: sessionSequences
       parameters:
         - $ref: "#/components/parameters/From"
@@ -1794,8 +1811,8 @@ paths:
         reported_sessions; see /v1/metrics/install-coverage for how much traffic
         is anonymous. Sessions here are process starts, not the command bursts of
         /v1/metrics/session-length. The cli_version, os, arch and is_ci filters
-        apply; command, exit_code and attr filters do not, as a session start has
-        no command. offset does not apply.
+        apply; command and exit_code do not, as a session start has no command,
+        and attr filters are rejected with 400. offset does not apply.
       operationId: sessionEnvironment
       parameters:
         - $ref: "#/components/parameters/From"
@@ -1870,7 +1887,8 @@ paths:
         /v1/metrics/install-coverage), and runs are read from raw logs, so
         results are bounded by log retention. The command, cli_version, os,
         arch and is_ci filters select the runs sequences are built from, so a
-        filter can hide a retry; exit_code and attr filters do not apply.
+        filter can hide a retry; exit_code does not apply and attr filters are
+        rejected with 400.
       operationId: retries
       parameters:
         - $ref: "#/components/parameters/From"
@@ -2238,7 +2256,8 @@ components:
       in: query
       required: false
       description: >
-        Exact-match filter against a record-level attribute, e.g.
+        **`/v1/traces` only**; aggregate `/v1/metrics/*` endpoints reject it
+        with 400. Exact-match filter against a record-level attribute, e.g.
         `attr.cli.ci_provider=github_actions`. Repeatable with different
         keys (ANDed together). Values are always bound as query parameters
         server-side — never string-concatenated into SQL — so arbitrary
@@ -2249,7 +2268,8 @@ components:
       in: query
       required: false
       description: >
-        Substring filter against a record-level attribute, e.g.
+        **`/v1/traces` only**; aggregate `/v1/metrics/*` endpoints reject it
+        with 400. Substring filter against a record-level attribute, e.g.
         `attr_contains.cli.ci_provider=github`. Case-sensitive; an empty
         value is ignored. Repeatable with different keys; ANDed with every
         other filter, including `attr.*` and `attr_in.*` on the same key.
@@ -2260,7 +2280,8 @@ components:
       in: query
       required: false
       description: >
-        Set-membership filter against a record-level attribute, e.g.
+        **`/v1/traces` only**; aggregate `/v1/metrics/*` endpoints reject it
+        with 400. Set-membership filter against a record-level attribute, e.g.
         `attr_in.cli.ci_provider=github_actions,gitlab_ci`. Accepts repeated
         or comma-separated values (OR within the key); ANDed across keys and
         with every other filter. Bound as a query parameter server-side.

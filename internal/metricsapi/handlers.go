@@ -27,7 +27,7 @@ func (s *Server) handleListTraces(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthorized", "missing tenant scope")
 		return
 	}
-	f, err := s.parseFilters(r)
+	f, err := s.parseFiltersWithAttrs(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return

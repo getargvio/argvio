@@ -387,6 +387,13 @@ func TestMetricsAPI_EndToEnd_Live(t *testing.T) {
 			{"/v1/metrics/cohorts?bucket=hour", http.StatusBadRequest},
 			{"/v1/metrics/retention?bucket=hour", http.StatusBadRequest},
 			{"/v1/metrics/latency?bucket=year", http.StatusBadRequest},
+			// Aggregates carry no attribute columns, so attribute filters
+			// are rejected instead of silently returning unfiltered data.
+			{"/v1/metrics/latency?attr.cli.ci_provider=github_actions", http.StatusBadRequest},
+			{"/v1/metrics/error-rate?attr_contains.cli.ci_provider=github", http.StatusBadRequest},
+			{"/v1/metrics/version-footprint?attr_in.cli.ci_provider=github_actions", http.StatusBadRequest},
+			{"/v1/metrics/session-environment?dimension=shell&attr.cli.ci_provider=x", http.StatusBadRequest},
+			{"/v1/traces?attr.cli.ci_provider=github_actions", http.StatusOK},
 		}
 		for _, c := range cases {
 			resp := get(t, c.path+"&from="+url.QueryEscape(fromParam))

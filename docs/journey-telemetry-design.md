@@ -119,7 +119,7 @@ can state it next to the numbers.
 ### 5. Prerequisite for slicing
 
 `attr.*`, `attr_contains.*` and `attr_in.*` apply to `/v1/traces` only; the
-aggregate endpoints ignore them. Install method (and any later attribute)
+aggregate endpoints reject them with a 400 rather than ignore them. Install method (and any later attribute)
 can only slice charts if it is promoted to a rollup dimension. Plan: add
 `install_method` as a column on `installs` and join it into the new
 endpoints; decide separately whether to generalize.
@@ -149,7 +149,7 @@ every response states it as `gap_seconds`.
   `command`, `cli_version`, `os`, `arch` and `is_ci` filters pick the *events*
   sessions are built from, before the gap rule is applied: `command=deploy`
   measures bursts of `deploy` runs, and a session interrupted by other commands
-  may split. `exit_code` and `attr.*` don't apply.
+  may split. `exit_code` doesn't apply and `attr.*` is rejected with a 400.
 - Events with the same timestamp are ordered by command name, which only
   matters for which of them comes first in a sequence.
 
@@ -207,8 +207,8 @@ name, runs in time order. A run **failed** when its exit code is non-zero.
   failures have no install id and are invisible (see `install-coverage`); a
   completion without an exit code is skipped. The `command`, `cli_version`,
   `os`, `arch` and `is_ci` filters pick the runs sequences are built from, so
-  a filter that drops some runs can hide a retry. `exit_code` and `attr.*`
-  don't apply.
+  a filter that drops some runs can hide a retry. `exit_code` doesn't apply and
+  `attr.*` is rejected with a 400.
 - **Response**: not time-bucketed; `data` holds `window_seconds`,
   `repeated_failure_count` and `commands`, one row per command with at least
   one failure, most failures first (`limit`/`offset` page them).
@@ -242,8 +242,8 @@ config is created, and an upgrade invalidates what the last version built.
   for both.
 - **Filters** (`command`, `cli_version`, `os`, `arch`, `is_ci`) choose which
   runs are reported. They never change which are cold: filtering to `build`
-  does not turn a later `build` into the install's cold run. `exit_code` and
-  `attr.*` don't apply.
+  does not turn a later `build` into the install's cold run. `exit_code` doesn't
+  apply and `attr.*` is rejected with a 400.
 - **Sample**: runs with a `cli.install_id`, a command name and a numeric
   `cli.command.duration_ms`; negative durations are dropped. Each side reports
   `run_count`, and percentiles (`percentile_agg` sketch, like `latency`) are
@@ -304,8 +304,9 @@ with the required `dimension` param:
 - **Unit**: process starts (`cli.session.started`), not the command bursts of
   "Sessions". A heavy user weighs by how often they start the CLI.
 - **Retention, filters**: raw logs, so bounded by log retention. The
-  `cli_version`, `os`, `arch` and `is_ci` filters apply; `command`,
-  `exit_code` and `attr.*` don't (a session start has no command). No
+  `cli_version`, `os`, `arch` and `is_ci` filters apply; `command`
+  and `exit_code` don't (a session start has no command), and `attr.*` is
+  rejected with a 400. No
   migration.
 
 ## Decisions (agreed)
