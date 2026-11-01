@@ -114,9 +114,9 @@ type MetricDefinition struct {
 const MetricDefinitionDiscoveryWindow = 30 * 24 * time.Hour
 
 // MetricDefinitions lists a tenant's declared metric definitions, narrowed to
-// services when non-empty, merged with the counters and measures its CLIs
-// sent over the discovery window without declaring them (kind counter and
-// duration; "other" is never listed). Ordered by service, then name.
+// services when non-empty, merged with the counters, measures and values its
+// CLIs sent over the discovery window without declaring them (kind counter,
+// duration and value; "other" is never listed). Ordered by service, then name.
 func (q *QueryBuilder) MetricDefinitions(ctx context.Context, scope TenantScope, services []string, now time.Time) ([]MetricDefinition, error) {
 	out := []MetricDefinition{}
 	pb := newScopedPredicates(scope, "tenant_id")
@@ -158,8 +158,12 @@ SELECT service_name, counter_name, 'counter' FROM %[2]s WHERE %[5]s AND counter_
 UNION
 SELECT service_name, measure_name, 'duration' FROM %[3]s WHERE %[5]s AND measure_name <> 'other'
 UNION
-SELECT service_name, measure_name, 'duration' FROM %[4]s WHERE %[5]s AND measure_name <> 'other'`,
-		caggCountersHourly, caggCountersDaily, caggMeasuresHourly, caggMeasuresDaily, where), pb.args...)
+SELECT service_name, measure_name, 'duration' FROM %[4]s WHERE %[5]s AND measure_name <> 'other'
+UNION
+SELECT service_name, value_name, 'value' FROM %[6]s WHERE %[5]s AND value_name <> 'other'
+UNION
+SELECT service_name, value_name, 'value' FROM %[7]s WHERE %[5]s AND value_name <> 'other'`,
+		caggCountersHourly, caggCountersDaily, caggMeasuresHourly, caggMeasuresDaily, where, caggValuesHourly, caggValuesDaily), pb.args...)
 	if err != nil {
 		return nil, fmt.Errorf("storage: discovered metrics: %w", err)
 	}

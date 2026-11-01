@@ -29,6 +29,8 @@ func vendorLabelAttr(metric string) string {
 		return attrCounterLabel
 	case metricMeasure:
 		return attrMeasureLabel
+	case metricValue:
+		return attrValueLabel
 	}
 	return ""
 }

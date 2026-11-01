@@ -24,6 +24,8 @@ type Bounds struct {
 	MaxMeasureNamesPerTenant      int
 	MaxMeasureLabelsPerName       int
 	MaxMetricDims                 int
+	MaxValueNamesPerTenant        int
+	MaxValueLabelsPerName         int
 	MaxDimValuesPerKey            int
 	// MetricCatalogCacheTTL bounds how stale a tenant's cached catalog
 	// rules may be; zero uses a minute.

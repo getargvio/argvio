@@ -937,6 +937,81 @@ func TestProcessMetrics_Catalog_Live(t *testing.T) {
 	})
 }
 
+// cli.value takes exactly its bounds, unit "1" and a cli.value.unit, and is
+// capped like counters.
+func TestProcessMetrics_Value_Live(t *testing.T) {
+	pipeline, pool, tenantID := setupPipeline(t, "basic", consent.ModeStrip)
+	pipeline.Bounds.MaxValueNamesPerTenant = 1
+	ctx := context.Background()
+	bounds := []float64{0, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 5000, 10000, 100000}
+
+	md := pmetric.NewMetrics()
+	rm := md.ResourceMetrics().AppendEmpty()
+	rm.Resource().Attributes().PutStr("cli.analytics.tier", "anonymous")
+	sm := rm.ScopeMetrics().AppendEmpty().Metrics()
+	newValue := func(unit string) pmetric.Metric {
+		m := sm.AppendEmpty()
+		m.SetName("cli.value")
+		m.SetUnit(unit)
+		m.SetEmptyHistogram().SetAggregationTemporality(pmetric.AggregationTemporalityDelta)
+		return m
+	}
+	add := func(m pmetric.Metric, version, name, unit string, b []float64, zeros, ones uint64) {
+		dp := m.Histogram().DataPoints().AppendEmpty()
+		dp.SetTimestamp(pcommon.NewTimestampFromTime(time.Now()))
+		dp.ExplicitBounds().FromRaw(b)
+		counts := make([]uint64, len(b)+1)
+		counts[0], counts[1] = zeros, ones
+		dp.BucketCounts().FromRaw(counts)
+		dp.SetCount(zeros + ones)
+		dp.SetSum(float64(ones))
+		dp.Attributes().PutStr("cli.version", version)
+		dp.Attributes().PutStr("cli.value.name", name)
+		if unit != "" {
+			dp.Attributes().PutStr("cli.value.unit", unit)
+		}
+		dp.Attributes().PutStr("cli.dim.severity", "high")
+	}
+	ok := newValue("1")
+	add(ok, "kept", "scan.findings", "1", bounds, 3, 2)
+	add(ok, "folded", "spec.size", "By", bounds, 0, 1)
+	add(ok, "bad-unit-attr", "scan.findings", "kg", bounds, 1, 0)
+	add(ok, "bad-bounds", "scan.findings", "1", []float64{1, 5, 10, 50, 100, 500, 1000, 5000, 10000, 60000, 300000}, 1, 0)
+	add(newValue("ms"), "bad-unit", "scan.findings", "1", bounds, 1, 0)
+
+	accepted, rejected, sample, err := pipeline.ProcessMetrics(ctx, md)
+	if err != nil || accepted != 3 || rejected != 2 {
+		t.Fatalf("ProcessMetrics: accepted=%d rejected=%d sample=%q err=%v, want 3/2", accepted, rejected, sample, err)
+	}
+	rows, err := pool.Query(ctx, `
+SELECT cli_version, datapoint_attributes ->> 'cli.value.name', coalesce(datapoint_attributes ->> 'cli.value.unit', ''),
+       coalesce(datapoint_attributes ->> 'cli.value.label', ''), histogram_count
+FROM metrics WHERE tenant_id = $1 AND metric_name = 'cli.value'`, tenantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string][4]string{}
+	for rows.Next() {
+		var version, name, unit, label string
+		var n int64
+		if err := rows.Scan(&version, &name, &unit, &label, &n); err != nil {
+			t.Fatal(err)
+		}
+		got[version] = [4]string{name, unit, label, fmt.Sprint(n)}
+	}
+	rows.Close()
+	want := map[string][4]string{
+		"kept":          {"scan.findings", "1", "severity=high", "5"},
+		"folded":        {"other", "By", "", "1"},
+		"bad-unit-attr": {"scan.findings", "", "severity=high", "1"},
+	}
+	for version, w := range want {
+		if got[version] != w {
+			t.Errorf("%s = %v, want %v", version, got[version], w)
+		}
+	}
+}
+
 // Measures take dimensions the same way.
 func TestProcessMetrics_MeasureDims_Live(t *testing.T) {
 	pipeline, pool, tenantID := setupPipeline(t, "basic", consent.ModeStrip)

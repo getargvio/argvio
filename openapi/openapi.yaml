@@ -1615,6 +1615,73 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /v1/metrics/values:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
+    get:
+      summary: Vendor-defined per-run values, listed with statistics or one as a time series
+      description: |
+        Per-run quantities sent by the CLI as the `cli.value` metric (a delta
+        histogram with fixed bucket bounds 0, 1, 2, 5, 10, 20, 50, 100, 200,
+        500, 1000, 5000, 10000, 100000), named by `cli.value.name`, in the unit
+        `cli.value.unit` (`1`, `By` or `%`), optionally broken down by a label
+        or dimensions (`cli.dim.<key>`) as for `/v1/metrics/counters`.
+        Accepted at the `anonymous` tier, with the same naming rules.
+
+        Statistics: `count` (runs), `sum`, `mean`, `min`, `max`, estimated
+        `p50`/`p90`/`p99` interpolated from the buckets, and `hit_rate`, the
+        share of runs that recorded more than zero, exact from the first
+        bucket. Without `name`, every value name with its statistics over the
+        window, most recorded first, plus `overflow`. With `name`, its
+        statistics over the whole window (`stats`), per bucket, per label and,
+        with `group_by`, per combination of dimension values.
+      operationId: values
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - name: name
+          in: query
+          required: false
+          description: Value name. Switches the response to that value's detail.
+          schema: { type: string }
+        - name: label
+          in: query
+          required: false
+          description: Narrow the series to one label. Requires `name`.
+          schema: { type: string }
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/Command"
+        - $ref: "#/components/parameters/IsCI"
+        - $ref: "#/components/parameters/Service"
+        - $ref: "#/components/parameters/DimGroupBy"
+        - $ref: "#/components/parameters/DimWhere"
+        - $ref: "#/components/parameters/Bucket"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: A ValueList without `name`, a ValueDetail with it.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    oneOf:
+                      - $ref: "#/components/schemas/ValueList"
+                      - $ref: "#/components/schemas/ValueDetail"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /v1/metrics/services:
     parameters:
       - $ref: "#/components/parameters/TenantHeader"
@@ -2884,7 +2951,8 @@ components:
         name: { type: string, nullable: true, description: "The CLI's OTel service.name; null for data points sent without one." }
         counters: { type: integer, description: "Distinct cli.counter names it sent." }
         measures: { type: integer, description: "Distinct cli.measure names it sent." }
-      required: [name, counters, measures]
+        values: { type: integer, description: "Distinct cli.value names it sent." }
+      required: [name, counters, measures, values]
     CounterTotal:
       type: object
       properties:
@@ -3029,6 +3097,75 @@ components:
           items: { $ref: "#/components/schemas/MeasureGroup" }
       required: [name, series, labels]
 
+    ValueStats:
+      type: object
+      description: Statistics of the per-run values behind a group of cli.value data points.
+      properties:
+        count: { type: integer, description: "Values recorded (runs)." }
+        datapoint_count: { type: integer }
+        sum: { type: number }
+        mean: { type: number, nullable: true }
+        min: { type: number, nullable: true }
+        max: { type: number, nullable: true }
+        p50: { type: number, nullable: true, description: "Estimated median, interpolated from the fixed buckets." }
+        p90: { type: number, nullable: true }
+        p99: { type: number, nullable: true }
+        hit_rate: { type: number, nullable: true, description: "Share of values above zero, exact; null without values." }
+      required: [count, datapoint_count, sum, mean, min, max, p50, p90, p99, hit_rate]
+    ValueList:
+      type: object
+      properties:
+        values:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/ValueStats"
+              - type: object
+                properties:
+                  name: { type: string }
+                  unit: { type: string, enum: ["1", "By", "%"] }
+                  label_count: { type: integer }
+                required: [name, unit, label_count]
+        overflow: { $ref: "#/components/schemas/CounterOverflow" }
+      required: [values, overflow]
+    ValuePoint:
+      allOf:
+        - $ref: "#/components/schemas/ValueStats"
+        - type: object
+          properties:
+            bucket: { type: string, format: date-time }
+          required: [bucket]
+    ValueDetail:
+      type: object
+      properties:
+        name: { type: string }
+        unit: { type: string, enum: ["1", "By", "%"] }
+        stats: { $ref: "#/components/schemas/ValueStats" }
+        series:
+          type: array
+          items: { $ref: "#/components/schemas/ValuePoint" }
+        labels:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/ValueStats"
+              - type: object
+                properties:
+                  label: { type: string, nullable: true }
+                required: [label]
+        groups:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/ValueStats"
+              - type: object
+                properties:
+                  dims: { $ref: "#/components/schemas/DimValues" }
+                  series:
+                    type: array
+                    items: { $ref: "#/components/schemas/ValuePoint" }
+                required: [dims, series]
+      required: [name, unit, stats, series, labels]
     MeasureGroup:
       allOf:
         - $ref: "#/components/schemas/MeasureStats"

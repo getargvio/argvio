@@ -824,6 +824,37 @@ func TestMetricsAPI_EndToEnd_Live(t *testing.T) {
 		}
 	})
 
+	t.Run("values list and detail with hit rate", func(t *testing.T) {
+		counts := make([]int64, storage.ValueBucketCount)
+		counts[0], counts[3] = 1, 3
+		n := int64(4)
+		row := storage.MetricRow{
+			Time: now.Add(-2 * time.Hour), TenantID: tenantID, MetricName: "cli.value", MetricType: "histogram",
+			HistogramCount: &n, HistogramSum: f64ptr(12), HistogramMin: f64ptr(0), HistogramMax: f64ptr(5),
+			HistogramBucketBounds: storage.ValueBounds, HistogramBucketCounts: counts, ConsentTier: "anonymous",
+			DatapointAttributes: storage.Attrs{"cli.value.name": "scan.findings", "cli.value.unit": "1"},
+		}
+		if _, err := w.InsertMetrics(ctx, []storage.MetricRow{row}); err != nil {
+			t.Fatal(err)
+		}
+		for _, cagg := range []string{"cagg_values_hourly", "cagg_values_daily"} {
+			if _, err := pool.Exec(ctx, `CALL refresh_continuous_aggregate($1, NULL, NULL)`, cagg); err != nil {
+				t.Fatal(err)
+			}
+		}
+		resp := get(t, "/v1/metrics/values?from="+url.QueryEscape(fromParam)+"&name=scan.findings&bucket=day")
+		defer resp.Body.Close()
+		var detail struct {
+			Data storage.ValueDetail `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+			t.Fatal(err)
+		}
+		if detail.Data.Stats.Count != 4 || detail.Data.Stats.HitRate == nil || *detail.Data.Stats.HitRate != 0.75 || detail.Data.Unit != "1" {
+			t.Errorf("detail = %+v, want 4 runs, hit rate 0.75", detail.Data)
+		}
+	})
+
 	t.Run("measures list and series, tenant scoped", func(t *testing.T) {
 		at := now.Add(-2 * time.Hour)
 		var points []storage.MetricRow
@@ -1079,3 +1110,5 @@ func TestMetricsAPI_OIDC_Live(t *testing.T) {
 		}
 	})
 }
+
+func f64ptr(v float64) *float64 { return &v }

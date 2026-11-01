@@ -59,6 +59,7 @@ type vendorMetric struct {
 var vendorMetrics = map[string]vendorMetric{
 	metricCounter: {"counter", attrCounterName, attrCounterLabel},
 	metricMeasure: {"duration", attrMeasureName, attrMeasureLabel},
+	metricValue:   {"value", attrValueName, attrValueLabel},
 }
 
 // attrServiceName is the OTel resource attribute naming the sending CLI.

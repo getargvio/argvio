@@ -129,6 +129,8 @@ func runPublic(cfg *config.Root, log *slog.Logger) error {
 		MaxMeasureNamesPerTenant:      cfg.Public.MaxMeasureNamesPerTenant,
 		MaxMeasureLabelsPerName:       cfg.Public.MaxMeasureLabelsPerName,
 		MaxMetricDims:                 cfg.Public.MaxMetricDims,
+		MaxValueNamesPerTenant:        cfg.Public.MaxValueNamesPerTenant,
+		MaxValueLabelsPerName:         cfg.Public.MaxValueLabelsPerName,
 		MaxDimValuesPerKey:            cfg.Public.MaxDimValuesPerKey,
 		MetricCatalogCacheTTL:         cfg.Public.MetricCatalogCacheTTL,
 	}

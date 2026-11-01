@@ -4,6 +4,7 @@ package otlp
 type metricCaps struct {
 	counterNames, counterLabels int
 	measureNames, measureLabels int
+	valueNames, valueLabels     int
 	dims, dimValues             int
 }
 
@@ -17,6 +18,8 @@ func (p *Pipeline) metricCaps() metricCaps {
 		counterLabels: pickCap(o.MaxCounterLabelsPerName, p.Bounds.MaxCounterLabelsPerName, defaultMaxCounterLabels),
 		measureNames:  pickCap(o.MaxMeasureNames, p.Bounds.MaxMeasureNamesPerTenant, defaultMaxMeasureNames),
 		measureLabels: pickCap(o.MaxMeasureLabelsPerName, p.Bounds.MaxMeasureLabelsPerName, defaultMaxMeasureLabels),
+		valueNames:    pickCap(o.MaxValueNames, p.Bounds.MaxValueNamesPerTenant, defaultMaxValueNames),
+		valueLabels:   pickCap(o.MaxValueLabelsPerName, p.Bounds.MaxValueLabelsPerName, defaultMaxValueLabels),
 		dims:          pickCap(o.MaxMetricDims, p.Bounds.MaxMetricDims, defaultMaxMetricDims),
 		dimValues:     pickCap(o.MaxDimValuesPerKey, p.Bounds.MaxDimValuesPerKey, defaultMaxDimValuesPerKey),
 	}

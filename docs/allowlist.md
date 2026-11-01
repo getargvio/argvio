@@ -278,6 +278,28 @@ the bucket is narrow (a p95 of 700 ms means somewhere in 500-1000 ms) and
 clamped to the observed min and max. Changing the bounds takes a new
 migration, since the rollups have one column per bucket.
 
+## Vendor values (`cli.value`)
+
+> **Warning: values are accepted at the `anonymous` tier**, with the same
+> naming rules as counters.
+
+Counters lose the per-run shape ("vulnerabilities **per scan**", "share of
+scans that found something") and `cli.measure` is milliseconds only.
+`cli.value` is a delta histogram of a quantity a CLI records **once per
+run**, zeros included: `cli.value.name`, an optional label or dimensions,
+and `cli.value.unit` (`1` by default, `By` or `%`; the instrument's own unit
+is always `1`). Its bounds are fixed, `0, 1, 2, 5, 10, 20, 50, 100, 200, 500,
+1000, 5000, 10000, 100000`; points with other bounds or a negative value are
+rejected. The first bucket, `(-inf, 0]`, counts the runs that recorded
+nothing, which makes the **hit rate** (`1 - bucket0 / count`) exact.
+
+Names and labels are capped like counters'
+(`public.max_value_names_per_tenant`, `public.max_value_labels_per_name`,
+overridable per tenant; `value_names`, `value_labels`, `value_overflow`,
+`value_dim_values`). `GET /v1/metrics/values` returns count, sum, mean,
+min, max, estimated p50/p90/p99 and the hit rate, per bucket, label and
+dimension group, off `cagg_values_hourly` / `cagg_values_daily`.
+
 ## Dimensions (`cli.dim.*`)
 
 > **Warning: dimensions are accepted at the `anonymous` tier**, like the
@@ -286,7 +308,7 @@ migration, since the rollups have one column per bucket.
 > input or anything derived from it.
 
 One label can't say "vulnerabilities by severity **and** by check". So a
-`cli.counter` or `cli.measure` data point may carry up to
+`cli.counter`, `cli.measure` or `cli.value` data point may carry up to
 `public.max_metric_dims` (default 3) named dimensions as `cli.dim.<key>`
 attributes: `cli.dim.severity=high`, `cli.dim.check=bola`.
 

@@ -5,14 +5,15 @@ import (
 	"fmt"
 )
 
-// VendorService is one CLI (OTel service.name) that sent vendor counters or
-// measures over the query window, with how many distinct names of each it
+// VendorService is one CLI (OTel service.name) that sent vendor counters,
+// measures or values over the query window, with how many distinct names of each it
 // sent. Name is nil for data points sent without a service.name, which the
 // SDKs always set but a hand-rolled exporter may not.
 type VendorService struct {
 	Name     *string `json:"name"`
 	Counters int64   `json:"counters"`
 	Measures int64   `json:"measures"`
+	Values   int64   `json:"values"`
 }
 
 // VendorServices lists the CLIs a tenant sent vendor metrics for over f.Time,
@@ -33,14 +34,19 @@ WITH names AS (
     SELECT service_name, 'measure', measure_name FROM %[3]s WHERE %[5]s
     UNION
     SELECT service_name, 'measure', measure_name FROM %[4]s WHERE %[5]s
+    UNION
+    SELECT service_name, 'value', value_name FROM %[6]s WHERE %[5]s
+    UNION
+    SELECT service_name, 'value', value_name FROM %[7]s WHERE %[5]s
 )
 SELECT service_name,
        count(*) FILTER (WHERE kind = 'counter') AS counters,
-       count(*) FILTER (WHERE kind = 'measure') AS measures
+       count(*) FILTER (WHERE kind = 'measure') AS measures,
+       count(*) FILTER (WHERE kind = 'value') AS value_names
 FROM names
 GROUP BY service_name
 ORDER BY count(*) DESC, service_name ASC NULLS LAST`,
-		caggCountersHourly, caggCountersDaily, caggMeasuresHourly, caggMeasuresDaily, where)
+		caggCountersHourly, caggCountersDaily, caggMeasuresHourly, caggMeasuresDaily, where, caggValuesHourly, caggValuesDaily)
 
 	rows, err := q.pool.Query(ctx, sql, pb.args...)
 	if err != nil {
@@ -50,7 +56,7 @@ ORDER BY count(*) DESC, service_name ASC NULLS LAST`,
 	out := []VendorService{}
 	for rows.Next() {
 		var s VendorService
-		if err := rows.Scan(&s.Name, &s.Counters, &s.Measures); err != nil {
+		if err := rows.Scan(&s.Name, &s.Counters, &s.Measures, &s.Values); err != nil {
 			return nil, fmt.Errorf("storage: scan vendor services: %w", err)
 		}
 		out = append(out, s)

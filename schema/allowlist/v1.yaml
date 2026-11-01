@@ -380,6 +380,38 @@ attributes:
       public.max_measure_labels_per_name distinct labels per measure, new
       ones are stored as "other".
 
+  cli.value.name:
+    type: string
+    max_length: 64
+    pattern: "^[a-z0-9][a-z0-9._-]*$"
+    min_tier: anonymous
+    sensitive: false
+    description: >
+      Name of a vendor-defined per-run value (cli.value), e.g.
+      "scan.findings". Same rules as cli.counter.name; past
+      public.max_value_names_per_tenant distinct names per tenant, new ones
+      are stored as "other".
+
+  cli.value.label:
+    type: string
+    max_length: 64
+    pattern: "^[a-z0-9][a-z0-9._-]*$"
+    min_tier: anonymous
+    sensitive: false
+    description: >
+      Optional breakdown of a cli.value. Same rules as cli.value.name; past
+      public.max_value_labels_per_name distinct labels per name, new ones are
+      stored as "other".
+
+  cli.value.unit:
+    type: string
+    enum: ["1", "By", "%"]
+    min_tier: anonymous
+    sensitive: false
+    description: >
+      What a cli.value counts: plain units ("1", the default), bytes ("By")
+      or a percentage ("%"). Durations go to cli.measure instead.
+
   # An attribute family: every cli.dim.<key> whose <key> matches key_pattern
   # is accepted under this one definition, so a vendor can add a dimension
   # without a server change.
@@ -391,7 +423,7 @@ attributes:
     min_tier: anonymous
     sensitive: false
     description: >
-      A named dimension of a cli.counter or cli.measure, e.g.
+      A named dimension of a cli.counter, cli.measure or cli.value, e.g.
       cli.dim.severity=high and cli.dim.check=bola on the same data point.
       Key and value follow the same rules as cli.counter.name. At most
       public.max_metric_dims per data point: a point with more, or with an
@@ -511,6 +543,30 @@ metrics:
     allowed_attributes:
       - cli.measure.name
       - cli.measure.label
+      - cli.dim.*
+      - cli.command.name
+      - cli.version
+      - cli.os
+      - cli.arch
+      - cli.is_ci
+
+  # One generic histogram for per-run quantities that aren't durations
+  # (findings per scan, operations scanned, spec size): recorded once per
+  # run, zeros included, so the first bucket, (-inf, 0], counts the runs that
+  # recorded nothing. Delta temporality only and exactly these bounds; the
+  # instrument's unit is always "1", the quantity's own unit is
+  # cli.value.unit. cagg_values_* (migration 0021) assume both.
+  - name: cli.value
+    type: histogram
+    unit: "1"
+    temporality: delta
+    explicit_bounds: [0, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 5000, 10000, 100000]
+    required_attributes:
+      - cli.value.name
+    allowed_attributes:
+      - cli.value.name
+      - cli.value.label
+      - cli.value.unit
       - cli.dim.*
       - cli.command.name
       - cli.version

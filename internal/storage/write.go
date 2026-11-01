@@ -24,6 +24,7 @@ func NewWriter(pool *pgxpool.Pool) *Writer {
 const (
 	colTime               = "time"
 	colTenantID           = "tenant_id"
+	colValue              = "value"
 	colCLIVersion         = "cli_version"
 	colArch               = "arch"
 	colCommandName        = "command_name"
@@ -95,7 +96,7 @@ func (w *Writer) InsertLogs(ctx context.Context, rows []LogRow) (int64, error) {
 }
 
 var metricColumns = []string{
-	colTime, colTenantID, "metric_name", "metric_type", "unit", "value",
+	colTime, colTenantID, "metric_name", "metric_type", "unit", colValue,
 	"histogram_count", "histogram_sum", "histogram_min", "histogram_max",
 	"histogram_bucket_bounds", "histogram_bucket_counts",
 	colCLIVersion, "os", colArch, colCommandName, colExitCode, colIsCI, colConsentTier,
