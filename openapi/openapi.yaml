@@ -1926,6 +1926,87 @@ paths:
           $ref: "#/components/responses/ProviderUnavailable"
         "500":
           $ref: "#/components/responses/InternalError"
+  /v1/dashboard/cards:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
+    get:
+      summary: The Product dashboard layout of a CLI
+      description: |
+        The saved layout of the CLI's Product dashboard (`saved: true`) or,
+        without one, the default generated from its catalog: a `kpi` and a
+        `trend` card per declared counter, duration or ratio, a `kpi` and a
+        `distribution` per value. Each card says its metric's `kind` and
+        `status`: `ok`, `deprecated` (left the catalog file) or `missing`.
+      operationId: dashboardCards
+      parameters:
+        - name: service
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The layout.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/DashboardLayout" }
+                required: [data]
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /v1/dashboard/cards/{service}:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
+      - name: service
+        in: path
+        required: true
+        schema: { type: string }
+    put:
+      summary: Save the Product dashboard layout of a CLI
+      description: |
+        Replaces the CLI's saved layout with `cards`, in order (at most 100).
+        An empty list removes it, so the default applies again. Each card
+        must be on a declared, current metric of the CLI, with a card type its
+        kind supports (`distribution` for durations and values; no `reach` or
+        `breakdown` for ratios); `options` is a JSON object of at most 4 KiB,
+        for the dashboard's own use. Requires the `admin` role; a
+        `metrics_admin` key can't. Allowed cross-origin, unlike the other
+        writes.
+      operationId: putDashboardCards
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                cards:
+                  type: array
+                  maxItems: 100
+                  items: { $ref: "#/components/schemas/DashboardCardInput" }
+              required: [cards]
+      responses:
+        "204":
+          description: Saved.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /v1/metrics/install-coverage:
     parameters:
       - $ref: "#/components/parameters/TenantHeader"
@@ -3008,6 +3089,29 @@ components:
         median_seconds: { type: number, description: "Median first-use minus first_seen over discoverers; negative gaps count as 0" }
       required: [kind, name, cohort_size, installs, discovered_within_1d, discovered_within_7d, discovered_within_30d, median_seconds]
 
+    DashboardCardInput:
+      type: object
+      properties:
+        metric: { type: string }
+        card_type: { type: string, enum: [kpi, trend, breakdown, distribution, reach] }
+        options: { type: object, additionalProperties: true }
+      required: [metric, card_type]
+    DashboardLayout:
+      type: object
+      properties:
+        service: { type: string }
+        saved: { type: boolean }
+        cards:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/DashboardCardInput"
+              - type: object
+                properties:
+                  kind: { type: string, description: "The metric's kind; empty when it isn't declared." }
+                  status: { type: string, enum: [ok, deprecated, missing] }
+                required: [kind, status]
+      required: [service, saved, cards]
     ApplyResult:
       type: object
       properties:

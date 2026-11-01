@@ -132,7 +132,7 @@ a `metrics_query` key or a `viewer` gets `403 insufficient_scope`, and a
 `metrics_admin` key gets the same on every read endpoint. An invalid file
 is `400 invalid_catalog` with every problem listed. The body is at most
 1 MiB. `updated_by` records the key's prefix or the user's issuer and
-subject. The endpoint isn't open to browsers (CORS stays GET-only): it is
+subject. The endpoint isn't open to browsers (CORS allows PUT only on the dashboard layout): it is
 meant for CI.
 
 ## What ingest does with it
@@ -154,6 +154,20 @@ dimensions are folded:
 Rejections show in the OTLP response's `PartialSuccess` counts. Ingest
 caches each tenant's catalog for `public.metric_catalog_cache_ttl` (60s), so
 a catalog change applies within it.
+
+## Dashboard layout
+
+The Product view shows each CLI's metrics as cards. Which cards, in which
+order and type, is the one thing the dashboard owns: `GET
+/v1/dashboard/cards?service=` returns the saved layout, or a default built
+from the catalog (a KPI plus a trend, or a distribution for values, per
+declared metric). A tenant admin saves one with `PUT
+/v1/dashboard/cards/{service}` (`{"cards": [{"metric", "card_type",
+"options"}]}`, replaced whole; an empty list goes back to the default).
+Card types are `kpi`, `trend`, `breakdown`, `distribution` (durations and
+values) and `reach` (not ratios). A card can only be saved on a declared,
+current metric; a card whose metric later leaves the file is served with
+`status: deprecated` (or `missing`), not dropped.
 
 ## API
 

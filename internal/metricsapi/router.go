@@ -3,6 +3,7 @@ package metricsapi
 import (
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -46,6 +47,13 @@ func (s *Server) router() http.Handler {
 		r.Put("/v1/metric-definitions/{service}", s.handlePutMetricDefinitions)
 	})
 
+	// The Product dashboard's layout, saved by a tenant admin from the UI.
+	r.Group(func(r chi.Router) {
+		r.Use(s.authMiddleware)
+		r.Use(s.layoutWriteAccess)
+		r.Put("/v1/dashboard/cards/{service}", s.handlePutDashboardCards)
+	})
+
 	r.Group(func(r chi.Router) {
 		r.Use(s.authMiddleware)
 		r.Use(s.readOnlyAccess)
@@ -73,6 +81,7 @@ func (s *Server) router() http.Handler {
 		r.Get("/v1/metrics/values", serveVendorInstrument(s, "values", s.QB.Values, s.QB.ValueSeries))
 		r.Get("/v1/metrics/services", s.handleVendorServices)
 		r.Get("/v1/metric-definitions", s.handleMetricDefinitions)
+		r.Get("/v1/dashboard/cards", s.handleGetDashboardCards)
 		r.Get("/v1/metrics/install-coverage", serveBucketed(s, "install coverage", storage.BucketDay, dailyBucket, s.QB.InstallCoverage))
 		r.Get("/v1/metrics/ci-split", serveBucketed(s, "ci split", storage.BucketHour, anyBucket, s.QB.CISplit))
 		r.Get("/v1/metrics/cohorts", serveBucketed(s, "cohorts", storage.BucketDay, dailyBucket, s.QB.SessionCohort))
@@ -100,20 +109,33 @@ func (s *Server) router() http.Handler {
 // corsHandler returns the CORS middleware, or nil while no origin is allowed.
 // Origins match exactly (config validation rejects wildcards), credentials are
 // never allowed (bearer tokens travel in a header, not a cookie), and only the
-// verbs and headers this API uses are permitted.
+// verbs and headers this API uses are permitted: GET everywhere, and PUT only
+// on the dashboard layout, the one write a browser makes.
 func (s *Server) corsHandler() func(http.Handler) http.Handler {
 	if len(s.CORS.AllowedOrigins) == 0 {
 		return nil
 	}
-	handler := cors.Handler(cors.Options{
-		AllowedOrigins:   s.CORS.AllowedOrigins,
-		AllowedMethods:   []string{http.MethodGet, http.MethodOptions},
-		AllowedHeaders:   []string{"Authorization", "Content-Type", TenantHeader},
-		ExposedHeaders:   []string{"WWW-Authenticate"},
-		AllowCredentials: false,
-		MaxAge:           int(s.CORS.MaxAge.Seconds()),
-	})
-	return func(next http.Handler) http.Handler { return preflightNoContent(handler(next)) }
+	options := func(methods ...string) func(http.Handler) http.Handler {
+		return cors.Handler(cors.Options{
+			AllowedOrigins:   s.CORS.AllowedOrigins,
+			AllowedMethods:   append(methods, http.MethodOptions),
+			AllowedHeaders:   []string{"Authorization", "Content-Type", TenantHeader},
+			ExposedHeaders:   []string{"WWW-Authenticate"},
+			AllowCredentials: false,
+			MaxAge:           int(s.CORS.MaxAge.Seconds()),
+		})
+	}
+	readOnly, layout := options(http.MethodGet), options(http.MethodGet, http.MethodPut)
+	return func(next http.Handler) http.Handler {
+		ro, rw := preflightNoContent(readOnly(next)), preflightNoContent(layout(next))
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/v1/dashboard/cards/") {
+				rw.ServeHTTP(w, r)
+				return
+			}
+			ro.ServeHTTP(w, r)
+		})
+	}
 }
 
 // preflightNoContent answers a CORS preflight with 204 rather than the 200
