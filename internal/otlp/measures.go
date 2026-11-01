@@ -24,14 +24,8 @@ const (
 // capMeasures is capCounters for cli.measure rows: names and labels past the
 // tenant's caps are stored as storage.MeasureOther.
 func (p *Pipeline) capMeasures(ctx context.Context, rows []storage.MetricRow) error {
-	nameLimit := p.Bounds.MaxMeasureNamesPerTenant
-	if nameLimit <= 0 {
-		nameLimit = defaultMaxMeasureNames
-	}
-	labelLimit := p.Bounds.MaxMeasureLabelsPerName
-	if labelLimit <= 0 {
-		labelLimit = defaultMaxMeasureLabels
-	}
+	caps := p.metricCaps()
+	nameLimit, labelLimit := caps.measureNames, caps.measureLabels
 	return p.capVendorInstrument(ctx, rows, vendorInstrument{
 		metric: metricMeasure, nameAttr: attrMeasureName, labelAttr: attrMeasureLabel,
 		nameLimit: nameLimit, labelLimit: labelLimit,

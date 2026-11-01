@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
+	"github.com/getargvio/argvio/internal/config"
 	"github.com/getargvio/argvio/internal/consent"
 	"github.com/getargvio/argvio/internal/tenant"
 )
@@ -62,6 +63,7 @@ func newTenantConfigCommand() *cobra.Command {
 		rateRPS, rateBPS                        float64
 		rateBurst                               int
 		retTraces, retLogs, retMetrics          int
+		caps                                    [6]int
 	)
 	cmd := &cobra.Command{
 		Use:   "config",
@@ -110,6 +112,19 @@ func newTenantConfigCommand() *cobra.Command {
 				cfg.RetentionMetricsDays = &retMetrics
 			}
 
+			for i, p := range []**int{
+				&cfg.MetricCaps.MaxCounterNames, &cfg.MetricCaps.MaxCounterLabelsPerName,
+				&cfg.MetricCaps.MaxMeasureNames, &cfg.MetricCaps.MaxMeasureLabelsPerName,
+				&cfg.MetricCaps.MaxMetricDims, &cfg.MetricCaps.MaxDimValuesPerKey,
+			} {
+				if caps[i] > 0 {
+					*p = &caps[i]
+				}
+			}
+			if d := cfg.MetricCaps.MaxMetricDims; d != nil && *d > config.MaxMetricDimsLimit {
+				return fmt.Errorf("--max-metric-dims must be between 1 and %d", config.MaxMetricDimsLimit)
+			}
+
 			store := tenant.NewStore(pool)
 			if err := store.UpsertConfig(ctx, cfg); err != nil {
 				return err
@@ -128,6 +143,12 @@ func newTenantConfigCommand() *cobra.Command {
 	cmd.Flags().IntVar(&retTraces, "retention-traces-days", 0, "override traces retention in days (0 = use global default)")
 	cmd.Flags().IntVar(&retLogs, "retention-logs-days", 0, "override logs retention in days (0 = use global default)")
 	cmd.Flags().IntVar(&retMetrics, "retention-metrics-days", 0, "override metrics retention in days (0 = use global default)")
+	cmd.Flags().IntVar(&caps[0], "max-counter-names", 0, "override public.max_counter_names_per_tenant (0 = use global default)")
+	cmd.Flags().IntVar(&caps[1], "max-counter-labels-per-name", 0, "override public.max_counter_labels_per_name (0 = use global default)")
+	cmd.Flags().IntVar(&caps[2], "max-measure-names", 0, "override public.max_measure_names_per_tenant (0 = use global default)")
+	cmd.Flags().IntVar(&caps[3], "max-measure-labels-per-name", 0, "override public.max_measure_labels_per_name (0 = use global default)")
+	cmd.Flags().IntVar(&caps[4], "max-metric-dims", 0, "override public.max_metric_dims, 1 to 8 (0 = use global default)")
+	cmd.Flags().IntVar(&caps[5], "max-dim-values-per-key", 0, "override public.max_dim_values_per_key (0 = use global default)")
 	return cmd
 }
 

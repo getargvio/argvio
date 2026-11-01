@@ -43,14 +43,8 @@ type vendorInstrument struct {
 // labels under it can't grow without bound. Like capErrorReasons, an error
 // fails the export before anything is stored.
 func (p *Pipeline) capCounters(ctx context.Context, rows []storage.MetricRow) error {
-	nameLimit := p.Bounds.MaxCounterNamesPerTenant
-	if nameLimit <= 0 {
-		nameLimit = defaultMaxCounterNames
-	}
-	labelLimit := p.Bounds.MaxCounterLabelsPerName
-	if labelLimit <= 0 {
-		labelLimit = defaultMaxCounterLabels
-	}
+	caps := p.metricCaps()
+	nameLimit, labelLimit := caps.counterNames, caps.counterLabels
 	return p.capVendorInstrument(ctx, rows, vendorInstrument{
 		metric: metricCounter, nameAttr: attrCounterName, labelAttr: attrCounterLabel,
 		nameLimit: nameLimit, labelLimit: labelLimit,

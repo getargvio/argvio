@@ -95,12 +95,12 @@ var descriptions = map[string]string{
 	"public.jwt_rate_limit_burst":               "Request-burst size for jwt/oidc-authenticated requests. 0 (default) means \"use rate_limit_burst instead\".",
 
 	"public.max_error_reasons_per_tenant": "Distinct cli.error.reason values kept per tenant. A new value past the cap is stored as \"other\" and counted in error_reason_overflow (see docs/allowlist.md).",
-	"public.max_counter_names_per_tenant": "Distinct cli.counter.name values kept per tenant. A new name past the cap is stored as \"other\" (its label dropped) and counted in counter_overflow (see docs/allowlist.md \"Vendor counters\").",
-	"public.max_counter_labels_per_name":  "Distinct cli.counter.label values kept per counter name, per tenant. A new label past the cap is stored as \"other\" and counted in counter_overflow.",
-	"public.max_measure_names_per_tenant": "Distinct cli.measure.name values kept per tenant. A new name past the cap is stored as \"other\" (its label dropped) and counted in measure_overflow (see docs/allowlist.md \"Vendor measures\").",
-	"public.max_measure_labels_per_name":  "Distinct cli.measure.label values kept per measure name, per tenant. A new label past the cap is stored as \"other\" and counted in measure_overflow.",
-	"public.max_metric_dims":              "Dimensions (cli.dim.<key> attributes) a cli.counter or cli.measure data point may carry, 1 to 8. A point with more is rejected, never stored without some. The dimensions are stored as one canonical tuple in the label, so max_counter_labels_per_name and max_measure_labels_per_name bound the tuples per name.",
-	"public.max_dim_values_per_key":       "Distinct values kept per (counter or measure name, dimension key), per tenant. A new value past the cap is stored as \"other\" inside the tuple, keeping the other dimensions, and counted in folded_dim_values of counter_overflow or measure_overflow.",
+	"public.max_counter_names_per_tenant": "Distinct cli.counter.name values kept per tenant. A new name past the cap is stored as \"other\" (its label dropped) and counted in counter_overflow (see docs/allowlist.md \"Vendor counters\"). Overridable per tenant in tenant_config.",
+	"public.max_counter_labels_per_name":  "Distinct cli.counter.label values kept per counter name, per tenant. A new label past the cap is stored as \"other\" and counted in counter_overflow. Overridable per tenant in tenant_config.",
+	"public.max_measure_names_per_tenant": "Distinct cli.measure.name values kept per tenant. A new name past the cap is stored as \"other\" (its label dropped) and counted in measure_overflow (see docs/allowlist.md \"Vendor measures\"). Overridable per tenant in tenant_config.",
+	"public.max_measure_labels_per_name":  "Distinct cli.measure.label values kept per measure name, per tenant. A new label past the cap is stored as \"other\" and counted in measure_overflow. Overridable per tenant in tenant_config.",
+	"public.max_metric_dims":              "Dimensions (cli.dim.<key> attributes) a cli.counter or cli.measure data point may carry, 1 to 8. A point with more is rejected, never stored without some. The dimensions are stored as one canonical tuple in the label, so max_counter_labels_per_name and max_measure_labels_per_name bound the tuples per name. Overridable per tenant in tenant_config.",
+	"public.max_dim_values_per_key":       "Distinct values kept per (counter or measure name, dimension key), per tenant. A new value past the cap is stored as \"other\" inside the tuple, keeping the other dimensions, and counted in folded_dim_values of counter_overflow or measure_overflow. Overridable per tenant in tenant_config.",
 
 	"public.allowlist_schema_path": "Path to the versioned allowlist/tier schema YAML (see docs/allowlist.md). The metrics server reads it too, for the consent tier ranking.",
 	"public.allowlist_hot_reload":  "Watch allowlist_schema_path and hot-reload on change without a restart.",
@@ -167,6 +167,7 @@ func main() {
 	fmt.Println("| `tier_enforcement_mode` | `strip` or `reject` when a record's declared tier exceeds the ceiling. |")
 	fmt.Println("| `rate_limit_requests_per_sec` / `rate_limit_bytes_per_sec` / `rate_limit_burst` | Override the public server's global rate-limit defaults. NULL = use global default. |")
 	fmt.Println("| `retention_traces_days` / `retention_logs_days` / `retention_metrics_days` | Shorter-than-global retention, enforced by `argvio retention sweep` (see docs/schema.md). NULL = use the global Timescale retention policy. |")
+	fmt.Println("| `max_counter_names` / `max_counter_labels_per_name` / `max_measure_names` / `max_measure_labels_per_name` / `max_metric_dims` / `max_dim_values_per_key` | Override the matching `public.max_*` vendor-metric caps (`--max-counter-names` and so on), e.g. to give one project room for many checks. Ingest reads them through the tenant cache, so a change applies within its TTL. NULL = use the global value. |")
 }
 
 func printSection(header string, rows []row) {

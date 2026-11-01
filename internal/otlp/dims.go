@@ -68,10 +68,7 @@ func (p *Pipeline) foldDims(metric string, kept map[string]any, dropped []string
 		}
 		dims[storage.DimLabelKey] = label
 	}
-	limit := p.Bounds.MaxMetricDims
-	if limit <= 0 {
-		limit = defaultMaxMetricDims
-	}
+	limit := p.metricCaps().dims
 	if len(dims) > limit {
 		return fmt.Sprintf("%d dimensions exceed max_metric_dims %d", len(dims), limit)
 	}
@@ -105,10 +102,7 @@ func (p *Pipeline) capDimValues(ctx context.Context, rows []storage.MetricRow, i
 	if len(counts) == 0 {
 		return nil
 	}
-	limit := p.Bounds.MaxDimValuesPerKey
-	if limit <= 0 {
-		limit = defaultMaxDimValuesPerKey
-	}
+	limit := p.metricCaps().dimValues
 	adm, err := in.admitDims(ctx, p.tenantUUID(), counts, limit, p.now())
 	if err != nil {
 		return err
