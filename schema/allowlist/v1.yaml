@@ -521,6 +521,7 @@ metrics:
     allowed_attributes:
       - cli.counter.name
       - cli.counter.label
+      - cli.install_id
       - cli.dim.*
       - cli.command.name
       - cli.version
@@ -543,6 +544,7 @@ metrics:
     allowed_attributes:
       - cli.measure.name
       - cli.measure.label
+      - cli.install_id
       - cli.dim.*
       - cli.command.name
       - cli.version
@@ -567,6 +569,7 @@ metrics:
       - cli.value.name
       - cli.value.label
       - cli.value.unit
+      - cli.install_id
       - cli.dim.*
       - cli.command.name
       - cli.version

@@ -161,6 +161,8 @@ LIMIT %s OFFSET %s`, valueAggregates, caggValuesDaily, pb.where(), limitPh, offs
 type ValuePoint struct {
 	Bucket time.Time `json:"bucket"`
 	ValueStats
+	// InstallsReached is set with reach=true: distinct installs behind it.
+	InstallsReached *int64 `json:"installs_reached,omitempty"`
 }
 
 // ValueLabelStats is one label's (or dimension tuple's) statistics over the
@@ -175,6 +177,8 @@ type ValueGroup struct {
 	Dims map[string]*string `json:"dims"`
 	ValueStats
 	Series []ValuePoint `json:"series"`
+	// InstallsReached is set with reach=true: distinct installs behind it.
+	InstallsReached *int64 `json:"installs_reached,omitempty"`
 }
 
 // ValueDetail is the response of ValueSeries. Stats covers the whole window
@@ -186,6 +190,7 @@ type ValueDetail struct {
 	Series []ValuePoint      `json:"series"`
 	Labels []ValueLabelStats `json:"labels"`
 	Groups []ValueGroup      `json:"groups,omitempty"`
+	Reach  *Reach            `json:"reach,omitempty"`
 }
 
 // ValueSeries returns one value's statistics per bucket (and over the whole
@@ -272,11 +277,28 @@ LIMIT %s`, valueAggregates, table, pb.where(), limitPh), pb.args...)
 		return ValueDetail{}, fmt.Errorf("storage: value labels: %w", err)
 	}
 
-	if len(dq.GroupBy) == 0 {
+	if len(dq.GroupBy) > 0 {
+		if out.Groups, err = q.valueGroups(ctx, table, bucketExpr, predicates(true), dq, clampLimit(f.Limit)); err != nil {
+			return out, err
+		}
+	}
+	if !dq.Reach {
 		return out, nil
 	}
-	out.Groups, err = q.valueGroups(ctx, table, bucketExpr, predicates(true), dq, clampLimit(f.Limit))
-	return out, err
+	r, err := q.reach(ctx, scope, f, table, bucketExpr, "value_label", func() *predicateBuilder { return predicates(true) }, dq)
+	if err != nil {
+		return out, err
+	}
+	out.Reach = &r.window
+	for i := range out.Series {
+		n := r.perBucket[out.Series[i].Bucket]
+		out.Series[i].InstallsReached = &n
+	}
+	for i := range out.Groups {
+		n := r.perGroup[dq.groupKeyOf(out.Groups[i].Dims)]
+		out.Groups[i].InstallsReached = &n
+	}
+	return out, nil
 }
 
 func (q *QueryBuilder) valueGroups(ctx context.Context, table, bucketExpr string, pb *predicateBuilder, dq DimQuery, limit int) ([]ValueGroup, error) {

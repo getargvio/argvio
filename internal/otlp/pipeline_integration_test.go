@@ -1012,6 +1012,48 @@ FROM metrics WHERE tenant_id = $1 AND metric_name = 'cli.value'`, tenantID)
 	}
 }
 
+// cli.install_id is kept on vendor metrics at basic tier, stripped below.
+func TestProcessMetrics_CounterInstallID_Live(t *testing.T) {
+	pipeline, pool, tenantID := setupPipeline(t, "basic", consent.ModeStrip)
+	ctx := context.Background()
+	md := pmetric.NewMetrics()
+	for _, tier := range []string{"anonymous", "basic"} {
+		rm := md.ResourceMetrics().AppendEmpty()
+		rm.Resource().Attributes().PutStr("cli.analytics.tier", tier)
+		m := rm.ScopeMetrics().AppendEmpty().Metrics().AppendEmpty()
+		m.SetName("cli.counter")
+		m.SetUnit("1")
+		m.SetEmptySum().SetIsMonotonic(true)
+		m.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityDelta)
+		dp := m.Sum().DataPoints().AppendEmpty()
+		dp.SetTimestamp(pcommon.NewTimestampFromTime(time.Now()))
+		dp.SetIntValue(1)
+		dp.Attributes().PutStr("cli.version", tier)
+		dp.Attributes().PutStr("cli.counter.name", "runs")
+		dp.Attributes().PutStr("cli.install_id", "8f1d2c3b-0000-4000-8000-000000000000")
+	}
+	if accepted, rejected, sample, err := pipeline.ProcessMetrics(ctx, md); err != nil || accepted != 2 || rejected != 0 {
+		t.Fatalf("ProcessMetrics: accepted=%d rejected=%d sample=%q err=%v", accepted, rejected, sample, err)
+	}
+	rows, err := pool.Query(ctx, `SELECT cli_version, datapoint_attributes ? 'cli.install_id' FROM metrics WHERE tenant_id = $1`, tenantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for rows.Next() {
+		var version string
+		var has bool
+		if err := rows.Scan(&version, &has); err != nil {
+			t.Fatal(err)
+		}
+		got[version] = has
+	}
+	rows.Close()
+	if got["anonymous"] || !got["basic"] {
+		t.Errorf("install id kept = %v, want only at basic", got)
+	}
+}
+
 // Measures take dimensions the same way.
 func TestProcessMetrics_MeasureDims_Live(t *testing.T) {
 	pipeline, pool, tenantID := setupPipeline(t, "basic", consent.ModeStrip)

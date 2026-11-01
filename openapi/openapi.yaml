@@ -1249,6 +1249,7 @@ paths:
         - $ref: "#/components/parameters/Service"
         - $ref: "#/components/parameters/DimGroupBy"
         - $ref: "#/components/parameters/DimWhere"
+        - $ref: "#/components/parameters/Reach"
         - $ref: "#/components/parameters/Bucket"
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Offset"
@@ -1373,6 +1374,7 @@ paths:
         - $ref: "#/components/parameters/Service"
         - $ref: "#/components/parameters/DimGroupBy"
         - $ref: "#/components/parameters/DimWhere"
+        - $ref: "#/components/parameters/Reach"
         - $ref: "#/components/parameters/Bucket"
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Offset"
@@ -1729,6 +1731,7 @@ paths:
         - $ref: "#/components/parameters/Service"
         - $ref: "#/components/parameters/DimGroupBy"
         - $ref: "#/components/parameters/DimWhere"
+        - $ref: "#/components/parameters/Reach"
         - $ref: "#/components/parameters/Bucket"
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Offset"
@@ -2617,6 +2620,19 @@ components:
       style: form
       explode: true
       schema: { type: array, maxItems: 2, items: { type: string, pattern: "^[a-z0-9][a-z0-9._-]{0,63}$" } }
+    Reach:
+      name: reach
+      in: query
+      required: false
+      description: |
+        Requires `name`. Also count the installs behind the metric: adds
+        `reach` (installs reached over the window, the share of data points
+        that carried an install id, the tenant's active installs and the
+        share reached) and `installs_reached` on each series point and group.
+        Only data points sent at basic tier or above carry an install id, so
+        installs reached is a lower bound; `reported_share` says how much of
+        the metric it covers. HyperLogLog estimates.
+      schema: { type: boolean }
     DimWhere:
       name: where
       in: query
@@ -3080,6 +3096,7 @@ components:
           type: array
           description: Only with group_by. One entry per combination of the grouped-by dimension values, largest first, capped at `limit`.
           items: { $ref: "#/components/schemas/CounterGroup" }
+        reach: { $ref: "#/components/schemas/Reach" }
       required: [name, series, labels]
 
     DimValues:
@@ -3167,8 +3184,17 @@ components:
           type: array
           description: Only with group_by. One entry per combination of the grouped-by dimension values, largest first, capped at `limit`.
           items: { $ref: "#/components/schemas/MeasureGroup" }
+        reach: { $ref: "#/components/schemas/Reach" }
       required: [name, series, labels]
 
+    Reach:
+      type: object
+      properties:
+        installs_reached: { type: integer, description: "Distinct installs behind the metric's data points (basic tier and above)." }
+        reported_share: { type: number, nullable: true, description: "Share of the metric's data points that carried an install id." }
+        active_installs: { type: integer, description: "The tenant's distinct installs that started a session in the window." }
+        active_share: { type: number, nullable: true, description: "installs_reached / active_installs." }
+      required: [installs_reached, reported_share, active_installs, active_share]
     RatioPoint:
       type: object
       properties:
@@ -3245,6 +3271,7 @@ components:
                     type: array
                     items: { $ref: "#/components/schemas/ValuePoint" }
                 required: [dims, series]
+        reach: { $ref: "#/components/schemas/Reach" }
       required: [name, unit, stats, series, labels]
     MeasureGroup:
       allOf:

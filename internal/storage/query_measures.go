@@ -143,6 +143,8 @@ LIMIT %s OFFSET %s`, measureAggregates, caggMeasuresDaily, pb.where(), limitPh, 
 type MeasurePoint struct {
 	Bucket time.Time `json:"bucket"`
 	MeasureStats
+	// InstallsReached is set with reach=true: distinct installs behind it.
+	InstallsReached *int64 `json:"installs_reached,omitempty"`
 }
 
 // MeasureLabelStats is one label's statistics over the query window. Label is
@@ -159,6 +161,8 @@ type MeasureGroup struct {
 	Dims map[string]*string `json:"dims"`
 	MeasureStats
 	Series []MeasurePoint `json:"series"`
+	// InstallsReached is set with reach=true: distinct installs behind it.
+	InstallsReached *int64 `json:"installs_reached,omitempty"`
 }
 
 // MeasureDetail is the response of MeasureSeries. Groups is only set when the
@@ -168,6 +172,7 @@ type MeasureDetail struct {
 	Series []MeasurePoint      `json:"series"`
 	Labels []MeasureLabelStats `json:"labels"`
 	Groups []MeasureGroup      `json:"groups,omitempty"`
+	Reach  *Reach              `json:"reach,omitempty"`
 }
 
 // MeasureSeries returns one measure's statistics per bucket, narrowed to one
@@ -255,11 +260,28 @@ LIMIT %s`, measureAggregates, table, pb.where(), limitPh)
 		return MeasureDetail{}, fmt.Errorf("storage: measure labels: %w", err)
 	}
 
-	if len(dq.GroupBy) == 0 {
+	if len(dq.GroupBy) > 0 {
+		if out.Groups, err = q.measureGroups(ctx, table, bucketExpr, predicates(true), dq, clampLimit(f.Limit)); err != nil {
+			return out, err
+		}
+	}
+	if !dq.Reach {
 		return out, nil
 	}
-	out.Groups, err = q.measureGroups(ctx, table, bucketExpr, predicates(true), dq, clampLimit(f.Limit))
-	return out, err
+	r, err := q.reach(ctx, scope, f, table, bucketExpr, "measure_label", func() *predicateBuilder { return predicates(true) }, dq)
+	if err != nil {
+		return out, err
+	}
+	out.Reach = &r.window
+	for i := range out.Series {
+		n := r.perBucket[out.Series[i].Bucket]
+		out.Series[i].InstallsReached = &n
+	}
+	for i := range out.Groups {
+		n := r.perGroup[dq.groupKeyOf(out.Groups[i].Dims)]
+		out.Groups[i].InstallsReached = &n
+	}
+	return out, nil
 }
 
 // measureGroups breaks a measure's series down by dq.GroupBy, most recorded
