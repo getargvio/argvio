@@ -69,7 +69,7 @@ type APIKey struct {
 	TenantID   uuid.UUID
 	KeyHash    []byte
 	KeyPrefix  string
-	Scope      string // public_ingest | metrics_query
+	Scope      string // public_ingest | metrics_query | metrics_admin
 	CreatedAt  time.Time
 	RevokedAt  *time.Time
 	LastUsedAt *time.Time
@@ -78,6 +78,9 @@ type APIKey struct {
 const (
 	ScopePublicIngest = "public_ingest"
 	ScopeMetricsQuery = "metrics_query"
+	// ScopeMetricsAdmin may only replace a CLI's metric catalog on the
+	// metrics server (PUT /v1/metric-definitions/{service}), for CI.
+	ScopeMetricsAdmin = "metrics_admin"
 )
 
 // Resolved is what an API-key lookup returns: everything the public server

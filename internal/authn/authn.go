@@ -78,6 +78,10 @@ type Verifier struct {
 	oidcVerifier  *oidc.Verifier
 	resolver      tenant.Resolver
 	apiKeyScope   string
+	// extraAPIKeyScopes are also accepted, after apiKeyScope; the identity
+	// carries which one matched (Resolved.APIKey.Scope) for the handler to
+	// authorize.
+	extraAPIKeyScopes []string
 
 	// trustTenantIDClaim lets an OIDC token's tenant_id claim pick the tenant
 	// without a membership row. Off unless explicitly configured.
@@ -399,6 +403,14 @@ func (v *Verifier) authenticateAPIKey(ctx context.Context, raw string) (Identity
 	if err != nil {
 		return Identity{}, err
 	}
+	for _, scope := range v.extraAPIKeyScopes {
+		if found {
+			break
+		}
+		if resolved, found, err = v.resolver.Resolve(ctx, raw, scope); err != nil {
+			return Identity{}, err
+		}
+	}
 	if !found || resolved.APIKey.RevokedAt != nil {
 		return Identity{}, ErrUnauthenticated
 	}
@@ -446,4 +458,11 @@ func isAsymmetricAlg(alg string) bool {
 	default:
 		return false
 	}
+}
+
+// AlsoAcceptAPIKeyScope makes the verifier accept API keys of scope too. The
+// caller must authorize on Identity.Resolved.APIKey.Scope, since such a key
+// is not one of apiKeyScope. Never call it with the other server's scope.
+func (v *Verifier) AlsoAcceptAPIKeyScope(scope string) {
+	v.extraAPIKeyScopes = append(v.extraAPIKeyScopes, scope)
 }

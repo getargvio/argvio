@@ -85,6 +85,7 @@ func runMetrics(cfg *config.Root, openAPIPath string, log *slog.Logger) error {
 	}
 
 	srv := metricsapi.NewServer(cfg.Metrics, cfg.Auth, storage.NewQueryBuilder(pool), resolver, tiers, openAPIPath, log)
+	srv.Catalog = storage.NewWriter(pool)
 	if err := srv.Verifier.CheckStartup(ctx); err != nil {
 		return fmt.Errorf("auth config: %w", err)
 	}

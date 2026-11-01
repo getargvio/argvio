@@ -1733,6 +1733,57 @@ paths:
           $ref: "#/components/responses/ProviderUnavailable"
         "500":
           $ref: "#/components/responses/InternalError"
+  /v1/metric-definitions/{service}:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
+      - name: service
+        in: path
+        required: true
+        description: The CLI, as the file's `service` states it.
+        schema: { type: string }
+    put:
+      summary: Replace a CLI's metric catalog with its argvio.metrics.yaml
+      description: |
+        The body is the CLI's `argvio.metrics.yaml` (JSON is accepted too, at
+        most 1 MiB). The CLI's catalog becomes exactly that file, as
+        `argvio metric apply` does: new metrics are created, changed or
+        previously deprecated ones updated, identical ones left alone, and
+        metrics missing from the file deprecated. The file's `service` must
+        match the path.
+
+        Requires a `metrics_admin` API key (for CI; such a key can't read
+        anything) or the `admin` role in the tenant. See
+        docs/metric-catalog.md.
+      operationId: putMetricDefinitions
+      requestBody:
+        required: true
+        content:
+          application/yaml:
+            schema: { type: string }
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: What changed, by metric name.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ApplyResult" }
+                required: [data]
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "413":
+          description: The body is over 1 MiB.
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /v1/metrics/install-coverage:
     parameters:
       - $ref: "#/components/parameters/TenantHeader"
@@ -2802,6 +2853,14 @@ components:
         median_seconds: { type: number, description: "Median first-use minus first_seen over discoverers; negative gaps count as 0" }
       required: [kind, name, cohort_size, installs, discovered_within_1d, discovered_within_7d, discovered_within_30d, median_seconds]
 
+    ApplyResult:
+      type: object
+      properties:
+        created: { type: array, items: { type: string } }
+        updated: { type: array, items: { type: string } }
+        unchanged: { type: array, items: { type: string } }
+        deprecated: { type: array, items: { type: string } }
+      required: [created, updated, unchanged, deprecated]
     MetricDefinition:
       type: object
       description: One metric of a CLI, declared in its catalog or only sent.

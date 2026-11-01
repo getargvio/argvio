@@ -10,6 +10,7 @@ package catalog
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -351,4 +352,10 @@ func contains(list []string, s string) bool {
 func IsValidation(err error) bool {
 	var v *ValidationError
 	return errors.As(err, &v)
+}
+
+// SpecJSON is a definition as stored and served: the entry with its defaults
+// filled in, as JSON.
+func (m Metric) SpecJSON() ([]byte, error) {
+	return json.Marshal(m)
 }

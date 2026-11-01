@@ -27,6 +27,10 @@ import (
 type Server struct {
 	QB       *storage.QueryBuilder
 	Verifier *authn.Verifier
+	// Catalog writes metric definitions, the one thing this otherwise
+	// read-only server writes (PUT /v1/metric-definitions/{service}). Nil
+	// disables that endpoint.
+	Catalog *storage.Writer
 
 	// Tiers ranks consent tiers as the allowlist schema does, for the
 	// read-time tier ceiling check on error detail.
@@ -51,6 +55,7 @@ func NewServer(cfg config.MetricsConfig, authCfg config.AuthConfig, qb *storage.
 		log = slog.Default()
 	}
 	verifier := authn.New(authCfg, resolver, tenant.ScopeMetricsQuery)
+	verifier.AlsoAcceptAPIKeyScope(tenant.ScopeMetricsAdmin)
 	verifier.EnableAdmin(authCfg) // metrics only: the public server never does this
 	return &Server{
 		QB:                    qb,

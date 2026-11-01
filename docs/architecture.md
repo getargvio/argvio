@@ -103,7 +103,7 @@ docs/schema.md for what's backing each query.
 
 Auth accepts whichever of the same globally-configured methods
 (`internal/config.AuthConfig`, `auth.methods` — see `public`'s auth
-section above) are enabled, scoped here to a `scope=metrics_query` API key
+section above) are enabled, scoped here to a `scope=metrics_query` API key (or a `scope=metrics_admin` key, accepted only by the catalog sync endpoint, so a vendor's CI can sync `argvio.metrics.yaml` without reading any data)
 (distinct from `public`'s ingest keys) instead of `public_ingest`. The
 bearer token is opaque to the dashboard; `internal/authn.Verifier` picks how to
 verify it from its shape, not by trying each method in turn:
@@ -177,7 +177,7 @@ to the configured role, and an invalid one is logged as a warning. The roles are
 | Role | May do |
 |---|---|
 | `viewer` | Read a tenant's data through the `metrics` API. |
-| `admin` | The same today, since `metrics` is read-only. Reserved as the role future write endpoints will require. |
+| `admin` | The same, plus the one write: replacing a CLI's metric catalog (`PUT /v1/metric-definitions/{service}`). |
 
 Being recognised as an admin therefore never implies more than the role: the
 default is `viewer` everywhere, and the role is exposed to handlers exactly like

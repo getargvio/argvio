@@ -25,8 +25,8 @@ func newAPIKeyCreateCommand() *cobra.Command {
 		Use:   "create",
 		Short: "Create an API key for a tenant",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if tenantIDStr == "" || (scope != tenant.ScopePublicIngest && scope != tenant.ScopeMetricsQuery) {
-				return fmt.Errorf("--tenant-id and --scope (public_ingest|metrics_query) are required")
+			if tenantIDStr == "" || (scope != tenant.ScopePublicIngest && scope != tenant.ScopeMetricsQuery && scope != tenant.ScopeMetricsAdmin) {
+				return fmt.Errorf("--tenant-id and --scope (public_ingest|metrics_query|metrics_admin) are required")
 			}
 			tenantID, err := uuid.Parse(tenantIDStr)
 			if err != nil {
@@ -56,7 +56,7 @@ func newAPIKeyCreateCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&dsn, "dsn", "", "Postgres DSN (defaults to $ARGVIO_STORAGE_DSN)")
 	cmd.Flags().StringVar(&tenantIDStr, "tenant-id", "", "tenant id (required)")
-	cmd.Flags().StringVar(&scope, "scope", "", "public_ingest|metrics_query (required)")
+	cmd.Flags().StringVar(&scope, "scope", "", "public_ingest|metrics_query|metrics_admin (required; metrics_admin only syncs metric catalogs)")
 	return cmd
 }
 
