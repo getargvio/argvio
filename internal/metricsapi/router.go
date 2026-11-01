@@ -61,6 +61,7 @@ func (s *Server) router() http.Handler {
 		r.Get("/v1/metrics/counters", serveVendorInstrument(s, "counters", s.QB.Counters, s.QB.CounterSeries))
 		r.Get("/v1/metrics/measures", serveVendorInstrument(s, "measures", s.QB.Measures, s.QB.MeasureSeries))
 		r.Get("/v1/metrics/services", s.handleVendorServices)
+		r.Get("/v1/metric-definitions", s.handleMetricDefinitions)
 		r.Get("/v1/metrics/install-coverage", serveBucketed(s, "install coverage", storage.BucketDay, dailyBucket, s.QB.InstallCoverage))
 		r.Get("/v1/metrics/ci-split", serveBucketed(s, "ci split", storage.BucketHour, anyBucket, s.QB.CISplit))
 		r.Get("/v1/metrics/cohorts", serveBucketed(s, "cohorts", storage.BucketDay, dailyBucket, s.QB.SessionCohort))

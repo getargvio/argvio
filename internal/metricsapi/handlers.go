@@ -467,3 +467,25 @@ func parseDimQuery(q url.Values) (storage.DimQuery, error) {
 	}
 	return dq, dq.Validate()
 }
+
+// handleMetricDefinitions serves /v1/metric-definitions: the tenant's metric
+// catalog (from argvio.metrics.yaml files, read-only here) merged with the
+// metrics its CLIs sent undeclared over the last 30 days. service=
+// (repeatable) narrows it to some CLIs. Not time-bucketed and needs no time
+// range.
+func (s *Server) handleMetricDefinitions(w http.ResponseWriter, r *http.Request) {
+	scope, ok := scopeFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "missing tenant scope")
+		return
+	}
+	ctx, cancel := s.withQuery(r.Context())
+	defer cancel()
+	out, err := s.QB.MetricDefinitions(ctx, scope, multiParam(r.URL.Query(), "service"), time.Now())
+	if err != nil {
+		s.Log.Error("metricsapi: metric definitions failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{responseDataKey: out})
+}
