@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/getargvio/argvio/internal/storage"
@@ -153,13 +155,14 @@ func (s *Server) handleFeatureDiscovery(w http.ResponseWriter, r *http.Request) 
 // the tenant's vendor instruments with their statistics, or, with name=, one
 // instrument's time series (bucketed like the other endpoints, optionally
 // narrowed by label=) and its labels. service= (repeatable) narrows either to
-// some of the tenant's CLIs. Two response shapes, so it can't use
+// some of the tenant's CLIs. With name=, where=key:value (repeatable) narrows
+// by dimension values and group_by=key (up to two) adds a breakdown. Two response shapes, so it can't use
 // serveBucketed.
 func serveVendorInstrument[L, D any](
 	s *Server,
 	name string,
 	list func(ctx context.Context, scope storage.TenantScope, f storage.Filters) (L, error),
-	series func(ctx context.Context, scope storage.TenantScope, f storage.Filters, name string, label *string, bucket storage.Bucket) (D, error),
+	series func(ctx context.Context, scope storage.TenantScope, f storage.Filters, name string, label *string, dq storage.DimQuery, bucket storage.Bucket) (D, error),
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		scope, ok := scopeFromContext(r.Context())
@@ -184,6 +187,15 @@ func serveVendorInstrument[L, D any](
 			l := q.Get("label")
 			label = &l
 		}
+		dq, err := parseDimQuery(q)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		if instrument == "" && (len(dq.GroupBy) > 0 || len(dq.Where) > 0) {
+			writeError(w, http.StatusBadRequest, "invalid_request", "group_by and where require name")
+			return
+		}
 		ctx, cancel := s.withQuery(r.Context())
 		defer cancel()
 
@@ -202,7 +214,7 @@ func serveVendorInstrument[L, D any](
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
-		out, err := series(ctx, scope, f, instrument, label, bucket)
+		out, err := series(ctx, scope, f, instrument, label, dq, bucket)
 		if err != nil {
 			s.Log.Error("metricsapi: "+name+" series failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
@@ -439,4 +451,19 @@ func (s *Server) handleDimensions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{responseDataKey: dims})
+}
+
+// parseDimQuery reads group_by (multi-value) and where=key:value
+// (multi-value; values of one key are ORed, keys ANDed) for the vendor
+// instrument series.
+func parseDimQuery(q url.Values) (storage.DimQuery, error) {
+	dq := storage.DimQuery{GroupBy: multiParam(q, "group_by"), Where: map[string][]string{}}
+	for _, kv := range multiParam(q, "where") {
+		k, v, ok := strings.Cut(kv, ":")
+		if !ok {
+			return dq, fmt.Errorf("where must be key:value, got %q", kv)
+		}
+		dq.Where[k] = append(dq.Where[k], v)
+	}
+	return dq, dq.Validate()
 }

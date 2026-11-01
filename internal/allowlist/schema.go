@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"sort"
+	"strings"
 )
 
 // AttrType is the accepted value type for an attribute.
@@ -43,13 +45,22 @@ type AttrDef struct {
 	MaxItems  int      `yaml:"max_items,omitempty"`
 	// Pattern, if set, is a regular expression a string value must match
 	// in full (anchor it with ^...$). Compiled once by finalize.
-	Pattern     string `yaml:"pattern,omitempty"`
+	Pattern string `yaml:"pattern,omitempty"`
+	// KeyPattern is required on, and only allowed on, an attribute family:
+	// a key ending in ".*" (e.g. "cli.dim.*") stands for every key with that
+	// prefix whose remainder matches KeyPattern in full. A metric, span or
+	// log lists the family key in allowed_attributes to accept all of them.
+	KeyPattern  string `yaml:"key_pattern,omitempty"`
 	MinTier     string `yaml:"min_tier"`
 	Sensitive   bool   `yaml:"sensitive"`
 	Description string `yaml:"description,omitempty"`
 
-	pattern *regexp.Regexp
+	pattern    *regexp.Regexp
+	keyPattern *regexp.Regexp
 }
+
+// familySuffix marks an attribute family key.
+const familySuffix = ".*"
 
 // MetricDef describes one allowed metric name.
 type MetricDef struct {
@@ -112,6 +123,9 @@ type Schema struct {
 	signalTypeSet  map[string]struct{}
 	metricsByName  map[string]MetricDef
 	logsByName     map[string]LogDef
+	// attribute families by prefix ("cli.dim."), sorted longest first so the
+	// most specific family wins.
+	families []AttrDef
 }
 
 // TierRank returns the numeric rank for a tier name and whether it is known.
@@ -170,10 +184,48 @@ func matchesPattern(pattern, name string) bool {
 	return false
 }
 
-// AttrDefFor looks up the shared attribute definition for key.
+// AttrDefFor looks up the shared attribute definition for key: its own, or
+// that of the attribute family it belongs to (with Key set to key).
 func (s *Schema) AttrDefFor(key string) (AttrDef, bool) {
-	d, ok := s.Attributes[key]
-	return d, ok
+	if d, ok := s.Attributes[key]; ok {
+		return d, true
+	}
+	if fam, ok := s.FamilyOf(key); ok {
+		d := s.Attributes[fam]
+		d.Key = key
+		return d, true
+	}
+	return AttrDef{}, false
+}
+
+// FamilyOf returns the attribute family key (e.g. "cli.dim.*") that key
+// belongs to: it has the family's prefix and the rest matches the family's
+// key_pattern. A key that is itself defined belongs to no family.
+func (s *Schema) FamilyOf(key string) (string, bool) {
+	if _, ok := s.Attributes[key]; ok {
+		return "", false
+	}
+	for _, f := range s.families {
+		prefix := strings.TrimSuffix(f.Key, "*")
+		if rest, ok := strings.CutPrefix(key, prefix); ok && f.keyPattern.MatchString(rest) {
+			return f.Key, true
+		}
+	}
+	return "", false
+}
+
+// IsAllowed reports whether key is in allowed (an AllowedSet) by name or
+// through the attribute family it belongs to.
+func (s *Schema) IsAllowed(allowed map[string]struct{}, key string) bool {
+	if _, ok := allowed[key]; ok {
+		return true
+	}
+	fam, ok := s.FamilyOf(key)
+	if !ok {
+		return false
+	}
+	_, ok = allowed[fam]
+	return ok
 }
 
 // finalize builds derived lookup indexes and validates internal consistency
@@ -214,8 +266,28 @@ func (s *Schema) finalize() error {
 			}
 			def.pattern = re
 		}
+		isFamily := strings.HasSuffix(k, familySuffix)
+		switch {
+		case isFamily && def.KeyPattern == "":
+			return fmt.Errorf("allowlist: attribute family %q requires key_pattern", k)
+		case !isFamily && def.KeyPattern != "":
+			return fmt.Errorf("allowlist: attribute %q: key_pattern is only supported on a family (a key ending in %q)", k, familySuffix)
+		case isFamily:
+			re, err := regexp.Compile(def.KeyPattern)
+			if err != nil {
+				return fmt.Errorf("allowlist: attribute family %q: invalid key_pattern: %w", k, err)
+			}
+			def.keyPattern = re
+			s.families = append(s.families, def)
+		}
 		s.Attributes[k] = def
 	}
+	sort.Slice(s.families, func(i, j int) bool {
+		if len(s.families[i].Key) != len(s.families[j].Key) {
+			return len(s.families[i].Key) > len(s.families[j].Key)
+		}
+		return s.families[i].Key < s.families[j].Key
+	})
 
 	s.metricsByName = make(map[string]MetricDef, len(s.Metrics))
 	for _, m := range s.Metrics {

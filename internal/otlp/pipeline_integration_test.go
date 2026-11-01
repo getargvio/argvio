@@ -36,6 +36,8 @@ func testBounds() Bounds {
 		MaxCounterLabelsPerName:       50,
 		MaxMeasureNamesPerTenant:      100,
 		MaxMeasureLabelsPerName:       50,
+		MaxMetricDims:                 3,
+		MaxDimValuesPerKey:            50,
 	}
 }
 
@@ -691,6 +693,131 @@ FROM metrics WHERE tenant_id = $1 AND metric_name = 'cli.counter'`, tenantID)
 	var foldedNames, foldedLabels int64
 	if err := pool.QueryRow(ctx, `SELECT folded_names, folded_labels FROM counter_overflow WHERE tenant_id = $1`, tenantID).Scan(&foldedNames, &foldedLabels); err != nil || foldedNames != 1 || foldedLabels != 1 {
 		t.Errorf("overflow = names %d labels %d (err %v), want 1 and 1", foldedNames, foldedLabels, err)
+	}
+}
+
+// Dimensions fold into a canonical tuple stored as the label; a point with too
+// many, an invalid one or a clashing label is rejected; values past
+// max_dim_values_per_key fold to "other" inside the tuple.
+func TestProcessMetrics_CounterDims_Live(t *testing.T) {
+	pipeline, pool, tenantID := setupPipeline(t, "basic", consent.ModeStrip)
+	pipeline.Bounds.MaxMetricDims = 2
+	pipeline.Bounds.MaxDimValuesPerKey = 2
+	ctx := context.Background()
+	now := time.Now()
+
+	md := pmetric.NewMetrics()
+	rm := md.ResourceMetrics().AppendEmpty()
+	rm.Resource().Attributes().PutStr("cli.analytics.tier", "anonymous")
+	m := rm.ScopeMetrics().AppendEmpty().Metrics().AppendEmpty()
+	m.SetName("cli.counter")
+	m.SetUnit("1")
+	m.SetEmptySum().SetIsMonotonic(true)
+	m.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityDelta)
+	// Each point is labelled by its cli.version so it can be found again.
+	add := func(version, label string, dims map[string]string) {
+		dp := m.Sum().DataPoints().AppendEmpty()
+		dp.SetTimestamp(pcommon.NewTimestampFromTime(now))
+		dp.SetIntValue(1)
+		dp.Attributes().PutStr("cli.version", version)
+		dp.Attributes().PutStr("cli.counter.name", "vulns")
+		if label != "" {
+			dp.Attributes().PutStr("cli.counter.label", label)
+		}
+		for k, v := range dims {
+			dp.Attributes().PutStr("cli.dim."+k, v)
+		}
+	}
+	add("two-dims", "", map[string]string{"severity": "high", "check": "bola"})
+	add("two-dims-again", "", map[string]string{"check": "bola", "severity": "high"})
+	add("label-and-dim", "bearer", map[string]string{"severity": "low"})
+	add("plain-label", "bearer", nil)
+	// Two check values are admitted per (name, key): bola above and jwt; cors
+	// is the least frequent new one and folds, keeping its severity.
+	add("jwt", "", map[string]string{"check": "jwt", "severity": "low"})
+	add("jwt-again", "", map[string]string{"check": "jwt", "severity": "low"})
+	add("cors-folded", "", map[string]string{"check": "cors", "severity": "high"})
+	add("too-many", "", map[string]string{"a": "1", "b": "2", "c": "3"})
+	add("too-many-with-label", "x", map[string]string{"a": "1", "b": "2"})
+	add("bad-value", "", map[string]string{"severity": "High Risk"})
+	add("bad-key", "", map[string]string{"Sev": "high"})
+	add("label-clash", "x", map[string]string{"label": "y"})
+
+	accepted, rejected, sample, err := pipeline.ProcessMetrics(ctx, md)
+	if err != nil || accepted != 7 || rejected != 5 {
+		t.Fatalf("ProcessMetrics: accepted=%d rejected=%d sample=%q err=%v, want 7/5", accepted, rejected, sample, err)
+	}
+
+	rows, err := pool.Query(ctx, `
+SELECT cli_version, coalesce(datapoint_attributes ->> 'cli.counter.label', ''), datapoint_attributes::text
+FROM metrics WHERE tenant_id = $1 AND metric_name = 'cli.counter'`, tenantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for rows.Next() {
+		var version, label, attrs string
+		if err := rows.Scan(&version, &label, &attrs); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(attrs, "cli.dim.") {
+			t.Errorf("%s: cli.dim.* attributes should not be stored, got %s", version, attrs)
+		}
+		got[version] = label
+	}
+	rows.Close()
+	want := map[string]string{
+		"two-dims":       "check=bola;severity=high",
+		"two-dims-again": "check=bola;severity=high",
+		"label-and-dim":  "label=bearer;severity=low",
+		"plain-label":    "bearer",
+		"jwt":            "check=jwt;severity=low",
+		"jwt-again":      "check=jwt;severity=low",
+		"cors-folded":    "check=other;severity=high",
+	}
+	if len(got) != len(want) {
+		t.Errorf("stored %v, want %v", got, want)
+	}
+	for version, label := range want {
+		if got[version] != label {
+			t.Errorf("%s: label %q, want %q", version, got[version], label)
+		}
+	}
+
+	var foldedDims int64
+	if err := pool.QueryRow(ctx, `SELECT folded_dim_values FROM counter_overflow WHERE tenant_id = $1`, tenantID).Scan(&foldedDims); err != nil || foldedDims != 1 {
+		t.Errorf("folded_dim_values = %d (err %v), want 1", foldedDims, err)
+	}
+}
+
+// Measures take dimensions the same way.
+func TestProcessMetrics_MeasureDims_Live(t *testing.T) {
+	pipeline, pool, tenantID := setupPipeline(t, "basic", consent.ModeStrip)
+	ctx := context.Background()
+
+	md := pmetric.NewMetrics()
+	rm := md.ResourceMetrics().AppendEmpty()
+	rm.Resource().Attributes().PutStr("cli.analytics.tier", "anonymous")
+	m := rm.ScopeMetrics().AppendEmpty().Metrics().AppendEmpty()
+	m.SetName("cli.measure")
+	m.SetUnit("ms")
+	m.SetEmptyHistogram().SetAggregationTemporality(pmetric.AggregationTemporalityDelta)
+	dp := m.Histogram().DataPoints().AppendEmpty()
+	dp.SetTimestamp(pcommon.NewTimestampFromTime(time.Now()))
+	dp.ExplicitBounds().FromRaw([]float64{1, 5, 10, 50, 100, 500, 1000, 5000, 10000, 60000, 300000})
+	dp.BucketCounts().FromRaw([]uint64{0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0})
+	dp.SetCount(1)
+	dp.SetSum(7)
+	dp.Attributes().PutStr("cli.measure.name", "scan.run")
+	dp.Attributes().PutStr("cli.dim.target", "openapi")
+	dp.Attributes().PutStr("cli.measure.label", "fast")
+
+	if accepted, rejected, sample, err := pipeline.ProcessMetrics(ctx, md); err != nil || accepted != 1 || rejected != 0 {
+		t.Fatalf("ProcessMetrics: accepted=%d rejected=%d sample=%q err=%v", accepted, rejected, sample, err)
+	}
+	var label string
+	if err := pool.QueryRow(ctx, `SELECT datapoint_attributes ->> 'cli.measure.label' FROM metrics WHERE tenant_id = $1 AND metric_name = 'cli.measure'`, tenantID).Scan(&label); err != nil || label != "label=fast;target=openapi" {
+		t.Errorf("label = %q (err %v), want label=fast;target=openapi", label, err)
 	}
 }
 

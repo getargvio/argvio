@@ -380,6 +380,27 @@ attributes:
       public.max_measure_labels_per_name distinct labels per measure, new
       ones are stored as "other".
 
+  # An attribute family: every cli.dim.<key> whose <key> matches key_pattern
+  # is accepted under this one definition, so a vendor can add a dimension
+  # without a server change.
+  cli.dim.*:
+    type: string
+    key_pattern: "^[a-z0-9][a-z0-9._-]{0,63}$"
+    max_length: 64
+    pattern: "^[a-z0-9][a-z0-9._-]*$"
+    min_tier: anonymous
+    sensitive: false
+    description: >
+      A named dimension of a cli.counter or cli.measure, e.g.
+      cli.dim.severity=high and cli.dim.check=bola on the same data point.
+      Key and value follow the same rules as cli.counter.name. At most
+      public.max_metric_dims per data point: a point with more, or with an
+      invalid one, is rejected rather than stored without it. Ingest folds the
+      dimensions into one canonical tuple, stored as the label
+      ("check=bola;severity=high"); past public.max_dim_values_per_key
+      distinct values per name and key, a new value is stored as "other"
+      inside the tuple.
+
   cli.args.raw:
     type: string
     max_length: 4096
@@ -468,6 +489,7 @@ metrics:
     allowed_attributes:
       - cli.counter.name
       - cli.counter.label
+      - cli.dim.*
       - cli.command.name
       - cli.version
       - cli.os
@@ -489,6 +511,7 @@ metrics:
     allowed_attributes:
       - cli.measure.name
       - cli.measure.label
+      - cli.dim.*
       - cli.command.name
       - cli.version
       - cli.os

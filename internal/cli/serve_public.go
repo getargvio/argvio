@@ -128,6 +128,8 @@ func runPublic(cfg *config.Root, log *slog.Logger) error {
 		MaxCounterLabelsPerName:       cfg.Public.MaxCounterLabelsPerName,
 		MaxMeasureNamesPerTenant:      cfg.Public.MaxMeasureNamesPerTenant,
 		MaxMeasureLabelsPerName:       cfg.Public.MaxMeasureLabelsPerName,
+		MaxMetricDims:                 cfg.Public.MaxMetricDims,
+		MaxDimValuesPerKey:            cfg.Public.MaxDimValuesPerKey,
 	}
 
 	srv := otlp.NewServer(verifier, schemaLoader, storage.NewWriter(pool), bounds, limiter, log)

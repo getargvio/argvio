@@ -36,6 +36,7 @@ func (p *Pipeline) capMeasures(ctx context.Context, rows []storage.MetricRow) er
 		metric: metricMeasure, nameAttr: attrMeasureName, labelAttr: attrMeasureLabel,
 		nameLimit: nameLimit, labelLimit: labelLimit,
 		nameLimitKey: "max_measure_names_per_tenant", labelLimitKey: "max_measure_labels_per_name",
-		admit: p.Writer.AdmitMeasures,
+		admit:        p.Writer.AdmitMeasures,
+		dimAdmitters: dimAdmitters{p.Writer.AdmitMeasureDims, p.Writer.RecordFoldedMeasureDims},
 	})
 }

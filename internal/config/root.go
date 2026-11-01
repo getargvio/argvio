@@ -1,5 +1,7 @@
 package config
 
+import "fmt"
+
 // Root is the single configuration document for the argvio binary: one
 // YAML file (or set of layered files, see Load) covers `public:`,
 // `metrics:`, and `storage:` sections together, mirroring how ory/hydra
@@ -37,6 +39,11 @@ func defaults() map[string]any {
 // ValidatePublic fails fast with every problem found (not just the first)
 // in the sections `argvio serve public` needs: log_level, public.*, and
 // storage.*.
+// MaxMetricDimsLimit is the highest public.max_metric_dims accepted. Every
+// dimension multiplies the tuples a name can have, and the label column
+// holds them all as one string.
+const MaxMetricDimsLimit = 8
+
 func (r Root) ValidatePublic() error {
 	var errs []string
 	if r.Public.GRPCListenAddr == "" {
@@ -71,6 +78,12 @@ func (r Root) ValidatePublic() error {
 	}
 	if r.Public.MaxMeasureNamesPerTenant <= 0 || r.Public.MaxMeasureLabelsPerName <= 0 {
 		errs = append(errs, "public.max_measure_names_per_tenant and max_measure_labels_per_name must be > 0")
+	}
+	if r.Public.MaxMetricDims <= 0 || r.Public.MaxMetricDims > MaxMetricDimsLimit {
+		errs = append(errs, fmt.Sprintf("public.max_metric_dims must be between 1 and %d", MaxMetricDimsLimit))
+	}
+	if r.Public.MaxDimValuesPerKey <= 0 {
+		errs = append(errs, "public.max_dim_values_per_key must be > 0")
 	}
 	if r.Public.APIKeyCacheTTL <= 0 {
 		errs = append(errs, "public.api_key_cache_ttl must be > 0")

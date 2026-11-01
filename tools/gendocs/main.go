@@ -99,6 +99,8 @@ var descriptions = map[string]string{
 	"public.max_counter_labels_per_name":  "Distinct cli.counter.label values kept per counter name, per tenant. A new label past the cap is stored as \"other\" and counted in counter_overflow.",
 	"public.max_measure_names_per_tenant": "Distinct cli.measure.name values kept per tenant. A new name past the cap is stored as \"other\" (its label dropped) and counted in measure_overflow (see docs/allowlist.md \"Vendor measures\").",
 	"public.max_measure_labels_per_name":  "Distinct cli.measure.label values kept per measure name, per tenant. A new label past the cap is stored as \"other\" and counted in measure_overflow.",
+	"public.max_metric_dims":              "Dimensions (cli.dim.<key> attributes) a cli.counter or cli.measure data point may carry, 1 to 8. A point with more is rejected, never stored without some. The dimensions are stored as one canonical tuple in the label, so max_counter_labels_per_name and max_measure_labels_per_name bound the tuples per name.",
+	"public.max_dim_values_per_key":       "Distinct values kept per (counter or measure name, dimension key), per tenant. A new value past the cap is stored as \"other\" inside the tuple, keeping the other dimensions, and counted in folded_dim_values of counter_overflow or measure_overflow.",
 
 	"public.allowlist_schema_path": "Path to the versioned allowlist/tier schema YAML (see docs/allowlist.md). The metrics server reads it too, for the consent tier ranking.",
 	"public.allowlist_hot_reload":  "Watch allowlist_schema_path and hot-reload on change without a restart.",

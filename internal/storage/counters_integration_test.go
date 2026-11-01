@@ -266,7 +266,7 @@ func TestCounters_Live(t *testing.T) {
 	})
 
 	t.Run("series per hour, labels over the window", func(t *testing.T) {
-		d, err := qb.CounterSeries(ctx, scope, Filters{Time: rng}, "rules.generated", nil, BucketHour)
+		d, err := qb.CounterSeries(ctx, scope, Filters{Time: rng}, "rules.generated", nil, DimQuery{}, BucketHour)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -283,7 +283,7 @@ func TestCounters_Live(t *testing.T) {
 
 	t.Run("series per day, narrowed to a label", func(t *testing.T) {
 		label := "get"
-		d, err := qb.CounterSeries(ctx, scope, Filters{Time: rng}, "rules.generated", &label, BucketDay)
+		d, err := qb.CounterSeries(ctx, scope, Filters{Time: rng}, "rules.generated", &label, DimQuery{}, BucketDay)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -297,14 +297,14 @@ func TestCounters_Live(t *testing.T) {
 	})
 
 	t.Run("another tenant's counters are never returned", func(t *testing.T) {
-		d, err := qb.CounterSeries(ctx, scope, Filters{Time: rng}, "leaked", nil, BucketDay)
+		d, err := qb.CounterSeries(ctx, scope, Filters{Time: rng}, "leaked", nil, DimQuery{}, BucketDay)
 		if err != nil || len(d.Series) != 0 || len(d.Labels) != 0 {
 			t.Errorf("leaked: %+v err=%v", d, err)
 		}
 	})
 
 	t.Run("unsupported bucket is rejected", func(t *testing.T) {
-		if _, err := qb.CounterSeries(ctx, scope, Filters{Time: rng}, "rules.generated", nil, Bucket("minute")); err == nil {
+		if _, err := qb.CounterSeries(ctx, scope, Filters{Time: rng}, "rules.generated", nil, DimQuery{}, Bucket("minute")); err == nil {
 			t.Fatal("expected error for unsupported bucket")
 		}
 	})

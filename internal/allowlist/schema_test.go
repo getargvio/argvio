@@ -559,3 +559,83 @@ func TestUnknownCommandEvent(t *testing.T) {
 		}
 	}
 }
+
+// cli.dim.* is an attribute family: any key with the prefix whose suffix is an
+// identifier is accepted on cli.counter and cli.measure, with the family's
+// type, value pattern and tier.
+func TestDimensionFamily(t *testing.T) {
+	s := loadRealSchema(t)
+	for _, metric := range []string{"cli.counter", "cli.measure"} {
+		m, ok := s.MetricByName(metric)
+		if !ok {
+			t.Fatalf("%s not on the allowlist", metric)
+		}
+		allowed := AllowedSet(m.AllowedAttributes)
+		if !s.IsAllowed(allowed, "cli.dim.severity") || !s.IsAllowed(allowed, "cli.dim.check.id") {
+			t.Errorf("%s should accept cli.dim.<key>", metric)
+		}
+		for _, bad := range []string{"cli.dim.", "cli.dim.Sev", "cli.dim.a=b", "cli.dim." + strings.Repeat("k", 65), "cli.dimx"} {
+			if s.IsAllowed(allowed, bad) {
+				t.Errorf("%s should not accept %q", metric, bad)
+			}
+		}
+	}
+	if m, _ := s.MetricByName("cli.command.duration"); s.IsAllowed(AllowedSet(m.AllowedAttributes), "cli.dim.severity") {
+		t.Error("a metric that doesn't list cli.dim.* must not accept dimensions")
+	}
+
+	def, ok := s.AttrDefFor("cli.dim.severity")
+	if !ok || def.Key != "cli.dim.severity" || def.MinTier != "anonymous" {
+		t.Fatalf("AttrDefFor(cli.dim.severity) = %+v, %v; want the family's definition under its own key", def, ok)
+	}
+	if err := CheckAttribute(def, "high"); err != nil {
+		t.Errorf("valid value rejected: %v", err)
+	}
+	for _, bad := range []string{"High", "a b", "x=y", strings.Repeat("v", 65)} {
+		if CheckAttribute(def, bad) == nil {
+			t.Errorf("value %q should be rejected", bad)
+		}
+	}
+	if fam, ok := s.FamilyOf("cli.counter.name"); ok {
+		t.Errorf("a defined key belongs to no family, got %q", fam)
+	}
+}
+
+func TestAttributeFamilyValidatedAtLoad(t *testing.T) {
+	base := `
+schema_version: 1
+consent_tiers: [{name: basic, rank: 0}]
+attributes:
+  %s:
+    type: string
+    %s
+    min_tier: basic
+`
+	for _, c := range []struct {
+		key, extra, wantErr string
+	}{
+		{"x.*", "", "requires key_pattern"},
+		{"x.y", `key_pattern: "^[a-z]+$"`, "only supported on a family"},
+		{"x.*", `key_pattern: "(["`, "invalid key_pattern"},
+	} {
+		_, err := Parse([]byte(fmt.Sprintf(base, c.key, c.extra)))
+		if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+			t.Errorf("key %s %s: err = %v, want %q", c.key, c.extra, err, c.wantErr)
+		}
+	}
+	s, err := Parse([]byte(fmt.Sprintf(base, "x.*", `key_pattern: "^[a-z]+$"`) + `
+  x.y.*:
+    type: string
+    key_pattern: "^[a-z]+$"
+    min_tier: basic
+`))
+	if err != nil {
+		t.Fatalf("valid families: %v", err)
+	}
+	if fam, _ := s.FamilyOf("x.y.z"); fam != "x.y.*" {
+		t.Errorf("FamilyOf(x.y.z) = %q, want the most specific family x.y.*", fam)
+	}
+	if fam, _ := s.FamilyOf("x.abc"); fam != "x.*" {
+		t.Errorf("FamilyOf(x.abc) = %q, want x.*", fam)
+	}
+}

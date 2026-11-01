@@ -1201,7 +1201,10 @@ paths:
       description: |
         Counts sent by the CLI as the `cli.counter` metric (a delta,
         monotonic sum): each data point adds its value to the counter named by
-        `cli.counter.name`, optionally broken down by `cli.counter.label`.
+        `cli.counter.name`, optionally broken down by `cli.counter.label` or
+        by up to `public.max_metric_dims` named dimensions (`cli.dim.<key>`),
+        which ingest stores as one canonical label tuple
+        (`check=bola;severity=high`); `group_by` and `where` read them back.
 
         **Warning: counters are accepted at the `anonymous` consent tier**, so
         they are reported from CI and from users who allow no install
@@ -1244,6 +1247,8 @@ paths:
         - $ref: "#/components/parameters/Command"
         - $ref: "#/components/parameters/IsCI"
         - $ref: "#/components/parameters/Service"
+        - $ref: "#/components/parameters/DimGroupBy"
+        - $ref: "#/components/parameters/DimWhere"
         - $ref: "#/components/parameters/Bucket"
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Offset"
@@ -1316,7 +1321,9 @@ paths:
         Durations sent by the CLI as the `cli.measure` metric (a delta
         histogram in `ms` with fixed bucket bounds): each data point holds the
         durations recorded for the measure named by `cli.measure.name`,
-        optionally broken down by `cli.measure.label`.
+        optionally broken down by `cli.measure.label` or by named dimensions
+        (`cli.dim.<key>`), as for `/v1/metrics/counters`. A group's statistics
+        merge its buckets' histograms.
 
         **Warning: measures are accepted at the `anonymous` consent tier**,
         like counters: names and labels must be fixed identifiers chosen in the
@@ -1364,6 +1371,8 @@ paths:
         - $ref: "#/components/parameters/Command"
         - $ref: "#/components/parameters/IsCI"
         - $ref: "#/components/parameters/Service"
+        - $ref: "#/components/parameters/DimGroupBy"
+        - $ref: "#/components/parameters/DimWhere"
         - $ref: "#/components/parameters/Bucket"
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Offset"
@@ -2344,6 +2353,28 @@ components:
       style: form
       explode: true
       schema: { type: array, items: { type: string, enum: ["amd64", "arm64", "386", "arm", "other"] } }
+    DimGroupBy:
+      name: group_by
+      in: query
+      required: false
+      description: |
+        Requires `name`. Dimension keys (`cli.dim.<key>`, see
+        docs/allowlist.md "Dimensions") to break the series down by, up to
+        two; adds `groups`. A plain label is the dimension `label`.
+      style: form
+      explode: true
+      schema: { type: array, maxItems: 2, items: { type: string, pattern: "^[a-z0-9][a-z0-9._-]{0,63}$" } }
+    DimWhere:
+      name: where
+      in: query
+      required: false
+      description: |
+        Requires `name`. `key:value` dimension filters on the series, labels
+        and groups; values of one key are ORed, different keys ANDed. At most
+        8 keys.
+      style: form
+      explode: true
+      schema: { type: array, items: { type: string, pattern: "^[a-z0-9][a-z0-9._-]*:[a-z0-9][a-z0-9._-]*$" } }
     Service:
       name: service
       in: query
@@ -2731,8 +2762,9 @@ components:
       properties:
         folded_names: { type: integer }
         folded_labels: { type: integer }
+        folded_dim_values: { type: integer, description: "Data points with at least one dimension value stored as other, past public.max_dim_values_per_key." }
         last_folded_at: { type: string, format: date-time, nullable: true }
-      required: [folded_names, folded_labels, last_folded_at]
+      required: [folded_names, folded_labels, folded_dim_values, last_folded_at]
 
     CounterList:
       type: object
@@ -2766,7 +2798,26 @@ components:
               label: { type: string, nullable: true, description: "null for data points sent without a label; other for labels past the cap" }
               total: { type: number }
             required: [label, total]
+        groups:
+          type: array
+          description: Only with group_by. One entry per combination of the grouped-by dimension values, largest first, capped at `limit`.
+          items: { $ref: "#/components/schemas/CounterGroup" }
       required: [name, series, labels]
+
+    DimValues:
+      type: object
+      description: The grouped-by dimension keys and their values; null for data points without that dimension. A tuple folded whole into other has every key as other.
+      additionalProperties: { type: string, nullable: true }
+
+    CounterGroup:
+      type: object
+      properties:
+        dims: { $ref: "#/components/schemas/DimValues" }
+        total: { type: number }
+        series:
+          type: array
+          items: { $ref: "#/components/schemas/CounterPoint" }
+      required: [dims, total, series]
 
     MeasureStats:
       type: object
@@ -2797,8 +2848,9 @@ components:
       properties:
         folded_names: { type: integer }
         folded_labels: { type: integer }
+        folded_dim_values: { type: integer, description: "Data points with at least one dimension value stored as other, past public.max_dim_values_per_key." }
         last_folded_at: { type: string, format: date-time, nullable: true }
-      required: [folded_names, folded_labels, last_folded_at]
+      required: [folded_names, folded_labels, folded_dim_values, last_folded_at]
 
     MeasureList:
       type: object
@@ -2833,7 +2885,22 @@ components:
                 properties:
                   label: { type: string, nullable: true, description: "null for data points sent without a label; other for labels past the cap" }
                 required: [label]
+        groups:
+          type: array
+          description: Only with group_by. One entry per combination of the grouped-by dimension values, largest first, capped at `limit`.
+          items: { $ref: "#/components/schemas/MeasureGroup" }
       required: [name, series, labels]
+
+    MeasureGroup:
+      allOf:
+        - $ref: "#/components/schemas/MeasureStats"
+        - type: object
+          properties:
+            dims: { $ref: "#/components/schemas/DimValues" }
+            series:
+              type: array
+              items: { $ref: "#/components/schemas/MeasurePoint" }
+          required: [dims, series]
 
     VersionChangePoint:
       type: object

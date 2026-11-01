@@ -89,14 +89,14 @@ func TestVendorMetricsByService_Live(t *testing.T) {
 		if got := totals(t, Filters{Time: rng, Services: []string{"jwtop", "vulnapi"}}); got["findings"] != 7 {
 			t.Errorf("jwtop+vulnapi totals = %v, want findings 7", got)
 		}
-		d, err := qb.CounterSeries(ctx, scope, Filters{Time: rng, Services: []string{"vulnapi"}}, "findings", nil, BucketHour)
+		d, err := qb.CounterSeries(ctx, scope, Filters{Time: rng, Services: []string{"vulnapi"}}, "findings", nil, DimQuery{}, BucketHour)
 		if err != nil || len(d.Series) != 1 || d.Series[0].Total != 5 {
 			t.Errorf("vulnapi series = %+v err=%v, want 5", d.Series, err)
 		}
 	})
 
 	t.Run("measures are filtered the same way", func(t *testing.T) {
-		d, err := qb.MeasureSeries(ctx, scope, Filters{Time: rng, Services: []string{"jwtop"}}, "crack.run", nil, BucketDay)
+		d, err := qb.MeasureSeries(ctx, scope, Filters{Time: rng, Services: []string{"jwtop"}}, "crack.run", nil, DimQuery{}, BucketDay)
 		if err != nil || len(d.Series) != 1 || d.Series[0].Count != 1 || d.Series[0].SumMS != 20 {
 			t.Errorf("jwtop measure series = %+v err=%v, want one duration of 20ms", d.Series, err)
 		}
