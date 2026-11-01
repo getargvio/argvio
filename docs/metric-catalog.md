@@ -64,6 +64,25 @@ Unknown fields are errors, so a typo can't silently drop a setting.
 `argvio metric validate` is the authoritative check: it also checks references
 between metrics, and lists every problem at once.
 
+## Ratios
+
+A `kind: ratio` entry is computed when it is read, from two other series,
+with the same filters and buckets on both sides (`GET /v1/metrics/ratios`):
+
+| Operand | Reads |
+|---|---|
+| `{metric: <counter>}` | its total, narrowed by `where` on its dims |
+| `{metric: <duration>}` | how many durations were recorded |
+| `{metric: <value>, agg: sum}` | the sum of its values (default) |
+| `{metric: <value>, agg: count}` | how many runs recorded it |
+| `{builtin: command_invocations, where: {command: scan}}` | command runs, optionally of one command |
+| `{builtin: sessions}` / `{builtin: active_installs}` | sessions started / distinct installs (basic tier and above), daily only |
+
+Metric operands are scoped to the CLI. **Built-in operands cover the whole
+tenant**, so with several CLIs, prefer `command_invocations` with a command,
+or a metric of the CLI, as the denominator. A ratio is `null` where its
+denominator is 0, never 0.
+
 ## Commands
 
 ```sh

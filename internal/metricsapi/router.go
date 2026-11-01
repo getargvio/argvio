@@ -69,6 +69,7 @@ func (s *Server) router() http.Handler {
 		r.Get("/v1/metrics/feature-discovery", s.handleFeatureDiscovery)
 		r.Get("/v1/metrics/counters", serveVendorInstrument(s, "counters", s.QB.Counters, s.QB.CounterSeries))
 		r.Get("/v1/metrics/measures", serveVendorInstrument(s, "measures", s.QB.Measures, s.QB.MeasureSeries))
+		r.Get("/v1/metrics/ratios", s.handleRatios)
 		r.Get("/v1/metrics/values", serveVendorInstrument(s, "values", s.QB.Values, s.QB.ValueSeries))
 		r.Get("/v1/metrics/services", s.handleVendorServices)
 		r.Get("/v1/metric-definitions", s.handleMetricDefinitions)

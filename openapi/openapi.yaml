@@ -1615,6 +1615,78 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /v1/metrics/ratios:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
+    get:
+      summary: A ratio metric of a CLI's catalog, computed at query time
+      description: |
+        Evaluates a `kind: ratio` definition of the CLI's catalog
+        (docs/metric-catalog.md): numerator / denominator × scale, both sides
+        with the request's filters and bucket, per bucket and over the whole
+        window. Nothing is stored. Vendor-metric operands are scoped to the
+        CLI and may be narrowed by dimension values (`where`); a value
+        operand reads its `sum` (default) or `count` (runs); a duration reads
+        its count. Built-in operands (`command_invocations`, optionally for one
+        `command`; `sessions`; `active_installs`) cover the whole tenant.
+        `value` is null where the denominator is zero.
+
+        A ratio over `sessions` or `active_installs` reads daily session
+        data: its bucket defaults to `day`, and `hour` is 400. The window
+        total of `active_installs` is a distinct count over the window, not a
+        sum of buckets. A ratio that isn't declared, is deprecated, or uses a
+        metric that no longer is, is 404.
+      operationId: ratios
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - name: service
+          in: query
+          required: true
+          schema: { type: string }
+        - name: name
+          in: query
+          required: true
+          description: The ratio's name in the catalog.
+          schema: { type: string }
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/Command"
+        - $ref: "#/components/parameters/IsCI"
+        - $ref: "#/components/parameters/Bucket"
+      responses:
+        "200":
+          description: The ratio per bucket and over the window.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      service: { type: string }
+                      name: { type: string }
+                      definition: { type: object, additionalProperties: true }
+                      series:
+                        type: array
+                        items: { $ref: "#/components/schemas/RatioPoint" }
+                      total: { $ref: "#/components/schemas/RatioPoint" }
+                    required: [service, name, definition, series, total]
+                required: [data]
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: The ratio, or a metric it uses, isn't declared for this CLI.
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /v1/metrics/values:
     parameters:
       - $ref: "#/components/parameters/TenantHeader"
@@ -3097,6 +3169,14 @@ components:
           items: { $ref: "#/components/schemas/MeasureGroup" }
       required: [name, series, labels]
 
+    RatioPoint:
+      type: object
+      properties:
+        bucket: { type: string, format: date-time, description: "Absent on the window total." }
+        numerator: { type: number }
+        denominator: { type: number }
+        value: { type: number, nullable: true, description: "numerator / denominator × scale; null when the denominator is 0." }
+      required: [numerator, denominator, value]
     ValueStats:
       type: object
       description: Statistics of the per-run values behind a group of cli.value data points.
