@@ -1243,6 +1243,7 @@ paths:
         - $ref: "#/components/parameters/Arch"
         - $ref: "#/components/parameters/Command"
         - $ref: "#/components/parameters/IsCI"
+        - $ref: "#/components/parameters/Service"
         - $ref: "#/components/parameters/Bucket"
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Offset"
@@ -1362,6 +1363,7 @@ paths:
         - $ref: "#/components/parameters/Arch"
         - $ref: "#/components/parameters/Command"
         - $ref: "#/components/parameters/IsCI"
+        - $ref: "#/components/parameters/Service"
         - $ref: "#/components/parameters/Bucket"
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Offset"
@@ -1604,6 +1606,61 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /v1/metrics/services:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
+    get:
+      summary: CLIs that sent vendor counters or measures
+      description: |
+        Every CLI (OTel resource attribute `service.name`) that sent
+        `cli.counter` or `cli.measure` data points over the window, with how
+        many distinct counter and measure names each sent, the CLI with the
+        most names first. Use a returned `name` as the `service` filter of
+        `/v1/metrics/counters` and `/v1/metrics/measures`. `name` is `null`
+        for data points sent without `service.name`, which the SDKs always set
+        but a hand-rolled exporter may not.
+
+        Read from the hourly and daily rollups, so a CLI that only started
+        sending today is listed once its first hour is materialized.
+      operationId: services
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/CLIVersion"
+        - $ref: "#/components/parameters/OS"
+        - $ref: "#/components/parameters/Arch"
+        - $ref: "#/components/parameters/Command"
+        - $ref: "#/components/parameters/IsCI"
+      responses:
+        "200":
+          description: The CLIs, most names first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/VendorService" }
+                required: [data]
+              example:
+                data:
+                  - name: vulnapi
+                    counters: 6
+                    measures: 2
+                  - name: jwtop
+                    counters: 3
+                    measures: 1
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /v1/metrics/install-coverage:
     parameters:
       - $ref: "#/components/parameters/TenantHeader"
@@ -2287,6 +2344,18 @@ components:
       style: form
       explode: true
       schema: { type: array, items: { type: string, enum: ["amd64", "arm64", "386", "arm", "other"] } }
+    Service:
+      name: service
+      in: query
+      required: false
+      description: |
+        The CLI that sent the vendor metric: its OTel resource attribute
+        `service.name`, which the SDKs set to the CLI's name. A tenant may ship
+        several CLIs; without this they are summed. Multi-value (OR); see
+        `/v1/metrics/services`.
+      style: form
+      explode: true
+      schema: { type: array, items: { type: string } }
     Command:
       name: command
       in: query
@@ -2639,6 +2708,14 @@ components:
         median_seconds: { type: number, description: "Median first-use minus first_seen over discoverers; negative gaps count as 0" }
       required: [kind, name, cohort_size, installs, discovered_within_1d, discovered_within_7d, discovered_within_30d, median_seconds]
 
+    VendorService:
+      type: object
+      description: One CLI that sent vendor metrics over the window.
+      properties:
+        name: { type: string, nullable: true, description: "The CLI's OTel service.name; null for data points sent without one." }
+        counters: { type: integer, description: "Distinct cli.counter names it sent." }
+        measures: { type: integer, description: "Distinct cli.measure names it sent." }
+      required: [name, counters, measures]
     CounterTotal:
       type: object
       properties:

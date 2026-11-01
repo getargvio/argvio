@@ -16,6 +16,14 @@ const (
 	caggCountersDaily  = "cagg_counters_daily"
 )
 
+// vendorPredicates is commandStatsPredicates plus the service filter, for the
+// vendor-metric rollups, the only ones grouped by service_name.
+func vendorPredicates(scope TenantScope, f Filters) *predicateBuilder {
+	pb := commandStatsPredicates(scope, f)
+	pb.addIfAnyStr("service_name", f.Services)
+	return pb
+}
+
 // CounterTotal is one counter name's total over the query window. LabelCount
 // is how many distinct labels it was reported with (including "other", not
 // counting data points without a label).
@@ -45,7 +53,7 @@ type CounterList struct {
 // Counters lists the tenant's counter names with their totals over f.Time,
 // largest first, off the daily rollup, with the tenant's fold counts.
 func (q *QueryBuilder) Counters(ctx context.Context, scope TenantScope, f Filters) (CounterList, error) {
-	pb := commandStatsPredicates(scope, f)
+	pb := vendorPredicates(scope, f)
 	limitPh := pb.nextPlaceholder(clampLimit(f.Limit))
 	offsetPh := pb.nextPlaceholder(f.Offset)
 
@@ -121,7 +129,7 @@ func (q *QueryBuilder) CounterSeries(ctx context.Context, scope TenantScope, f F
 	}
 	out := CounterDetail{Name: name, Series: []CounterPoint{}, Labels: []CounterLabelTotal{}}
 
-	pb := commandStatsPredicates(scope, f)
+	pb := vendorPredicates(scope, f)
 	pb.add("counter_name = $%d", name)
 	if label != nil {
 		pb.add("counter_label = $%d", *label)
@@ -152,7 +160,7 @@ LIMIT %s OFFSET %s`, bucketExpr, table, pb.where(), limitPh, offsetPh)
 		return CounterDetail{}, fmt.Errorf("storage: counter series: %w", err)
 	}
 
-	pb = commandStatsPredicates(scope, f)
+	pb = vendorPredicates(scope, f)
 	pb.add("counter_name = $%d", name)
 	limitPh = pb.nextPlaceholder(clampLimit(f.Limit))
 	sql = fmt.Sprintf(`
