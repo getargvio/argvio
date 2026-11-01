@@ -130,6 +130,7 @@ func runPublic(cfg *config.Root, log *slog.Logger) error {
 		MaxMeasureLabelsPerName:       cfg.Public.MaxMeasureLabelsPerName,
 		MaxMetricDims:                 cfg.Public.MaxMetricDims,
 		MaxDimValuesPerKey:            cfg.Public.MaxDimValuesPerKey,
+		MetricCatalogCacheTTL:         cfg.Public.MetricCatalogCacheTTL,
 	}
 
 	srv := otlp.NewServer(verifier, schemaLoader, storage.NewWriter(pool), bounds, limiter, log)

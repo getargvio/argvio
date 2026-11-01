@@ -34,6 +34,7 @@ type core struct {
 	bounds       Bounds
 	limiter      *ratelimit.Limiter
 	log          *slog.Logger
+	catalogs     *catalogCache
 }
 
 // authenticate is cache-backed so a retry storm never reaches Postgres.
@@ -65,10 +66,11 @@ func (c *core) authenticate(ctx context.Context, token string, nBytes int) (*aut
 
 func (c *core) newPipeline(id *authn.Identity) *Pipeline {
 	return &Pipeline{
-		Schema: c.schemaLoader.Current(),
-		Tenant: id.Resolved,
-		Bounds: c.bounds,
-		Writer: c.writer,
-		Log:    c.log,
+		Schema:   c.schemaLoader.Current(),
+		Tenant:   id.Resolved,
+		Bounds:   c.bounds,
+		Writer:   c.writer,
+		Log:      c.log,
+		Catalogs: c.catalogs,
 	}
 }

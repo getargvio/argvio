@@ -25,6 +25,9 @@ type Bounds struct {
 	MaxMeasureLabelsPerName       int
 	MaxMetricDims                 int
 	MaxDimValuesPerKey            int
+	// MetricCatalogCacheTTL bounds how stale a tenant's cached catalog
+	// rules may be; zero uses a minute.
+	MetricCatalogCacheTTL time.Duration
 }
 
 // checkTimestamp reports whether ts is within [now-past, now+future]. A

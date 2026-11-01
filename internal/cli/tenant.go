@@ -64,6 +64,7 @@ func newTenantConfigCommand() *cobra.Command {
 		rateBurst                               int
 		retTraces, retLogs, retMetrics          int
 		caps                                    [6]int
+		strictMetrics                           bool
 	)
 	cmd := &cobra.Command{
 		Use:   "config",
@@ -89,6 +90,7 @@ func newTenantConfigCommand() *cobra.Command {
 			defer pool.Close()
 
 			cfg := tenant.Config{
+				StrictMetrics:       strictMetrics,
 				TenantID:            tenantID,
 				TierCeiling:         tierCeiling,
 				TierEnforcementMode: consentModeFromString(tierMode),
@@ -148,6 +150,7 @@ func newTenantConfigCommand() *cobra.Command {
 	cmd.Flags().IntVar(&caps[2], "max-measure-names", 0, "override public.max_measure_names_per_tenant (0 = use global default)")
 	cmd.Flags().IntVar(&caps[3], "max-measure-labels-per-name", 0, "override public.max_measure_labels_per_name (0 = use global default)")
 	cmd.Flags().IntVar(&caps[4], "max-metric-dims", 0, "override public.max_metric_dims, 1 to 8 (0 = use global default)")
+	cmd.Flags().BoolVar(&strictMetrics, "strict-metrics", false, "reject vendor metrics the sending CLI's catalog (argvio.metrics.yaml) doesn't declare")
 	cmd.Flags().IntVar(&caps[5], "max-dim-values-per-key", 0, "override public.max_dim_values_per_key (0 = use global default)")
 	return cmd
 }

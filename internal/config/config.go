@@ -17,6 +17,11 @@ import "time"
 // koanf's duration-string form (chunk intervals, timestamp skew bounds).
 const defaultDayDuration = "24h"
 
+// defaultCacheTTL is the default lifetime of in-memory lookup caches (API
+// keys, introspection results, metric catalogs) in koanf's duration-string
+// form.
+const defaultCacheTTL = "60s"
+
 // TLSConfig is shared by both servers' listeners.
 type TLSConfig struct {
 	Enabled  bool   `koanf:"enabled"`

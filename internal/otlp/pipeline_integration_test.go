@@ -2,6 +2,7 @@ package otlp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math"
@@ -828,6 +829,112 @@ func TestProcessMetrics_TenantCapOverrides_Live(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM metrics WHERE tenant_id = $1 AND datapoint_attributes ->> 'cli.counter.name' = 'other'`, tenantID).Scan(&folded); err != nil || folded != 1 {
 		t.Errorf("folded names = %d (err %v), want 1", folded, err)
 	}
+}
+
+// The sending CLI's catalog governs its vendor metrics: undeclared
+// dimensions are dropped, a kind mismatch or a point below min_tier is
+// rejected, and strict_metrics rejects undeclared metrics.
+func TestProcessMetrics_Catalog_Live(t *testing.T) {
+	pipeline, pool, tenantID := setupPipeline(t, "basic", consent.ModeStrip)
+	ctx := context.Background()
+	defs := []storage.MetricDefinitionInput{
+		{Name: "vulns.found", Kind: "counter", Spec: json.RawMessage(`{"name":"vulns.found","kind":"counter","title":"V","dims":["severity"]}`)},
+		{Name: "scan.run", Kind: "duration", Spec: json.RawMessage(`{"name":"scan.run","kind":"duration","title":"S"}`)},
+		{Name: "installs.seen", Kind: "counter", Spec: json.RawMessage(`{"name":"installs.seen","kind":"counter","title":"I","min_tier":"basic"}`)},
+		{Name: "gone", Kind: "counter", Spec: json.RawMessage(`{"name":"gone","kind":"counter","title":"G"}`)},
+	}
+	if _, err := pipeline.Writer.ApplyMetricDefinitions(ctx, tenantID, "vulnapi", defs, "test", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pipeline.Writer.ApplyMetricDefinitions(ctx, tenantID, "vulnapi", defs[:3], "test", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	send := func(t *testing.T, strict bool) (accepted, rejected int64, stored map[string]string) {
+		t.Helper()
+		pipeline.Tenant.Config.StrictMetrics = strict
+		pipeline.Catalogs = newCatalogCache(time.Minute, pipeline.Writer.MetricCatalogRules)
+		pipeline.catalog = nil
+		md := pmetric.NewMetrics()
+		rm := md.ResourceMetrics().AppendEmpty()
+		rm.Resource().Attributes().PutStr("cli.analytics.tier", "anonymous")
+		rm.Resource().Attributes().PutStr("service.name", "vulnapi")
+		m := rm.ScopeMetrics().AppendEmpty().Metrics().AppendEmpty()
+		m.SetName("cli.counter")
+		m.SetUnit("1")
+		m.SetEmptySum().SetIsMonotonic(true)
+		m.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityDelta)
+		add := func(version, name string, attrs map[string]string) {
+			dp := m.Sum().DataPoints().AppendEmpty()
+			dp.SetTimestamp(pcommon.NewTimestampFromTime(time.Now()))
+			dp.SetIntValue(1)
+			dp.Attributes().PutStr("cli.version", version)
+			dp.Attributes().PutStr("cli.counter.name", name)
+			for k, v := range attrs {
+				dp.Attributes().PutStr(k, v)
+			}
+		}
+		add("declared", "vulns.found", map[string]string{"cli.dim.severity": "high", "cli.dim.check": "bola", "cli.counter.label": "x"})
+		add("kind-mismatch", "scan.run", nil)
+		add("below-tier", "installs.seen", nil)
+		add("undeclared", "rules.loaded", nil)
+		add("deprecated", "gone", nil)
+
+		before := map[string]bool{}
+		rows, _ := pool.Query(ctx, `SELECT id::text FROM metrics WHERE tenant_id = $1`, tenantID)
+		for rows.Next() {
+			var id string
+			_ = rows.Scan(&id)
+			before[id] = true
+		}
+		rows.Close()
+		accepted, rejected, _, err := pipeline.ProcessMetrics(ctx, md)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored = map[string]string{}
+		rows, err = pool.Query(ctx, `SELECT id::text, cli_version, coalesce(datapoint_attributes ->> 'cli.counter.label', '') FROM metrics WHERE tenant_id = $1`, tenantID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var id, version, label string
+			if err := rows.Scan(&id, &version, &label); err != nil {
+				t.Fatal(err)
+			}
+			if !before[id] {
+				stored[version] = label
+			}
+		}
+		rows.Close()
+		return accepted, rejected, stored
+	}
+
+	t.Run("lenient", func(t *testing.T) {
+		accepted, rejected, stored := send(t, false)
+		if accepted != 3 || rejected != 2 {
+			t.Errorf("accepted=%d rejected=%d, want 3/2 (kind mismatch and below tier rejected)", accepted, rejected)
+		}
+		if label, ok := stored["declared"]; !ok || label != "severity=high" {
+			t.Errorf("declared point label = %q, want only the declared severity", label)
+		}
+		if _, ok := stored["undeclared"]; !ok {
+			t.Error("an undeclared metric is accepted without strict_metrics")
+		}
+		if _, ok := stored["deprecated"]; !ok {
+			t.Error("a deprecated metric is accepted as undeclared without strict_metrics")
+		}
+	})
+
+	t.Run("strict", func(t *testing.T) {
+		accepted, rejected, stored := send(t, true)
+		if accepted != 1 || rejected != 4 {
+			t.Errorf("accepted=%d rejected=%d, want 1/4", accepted, rejected)
+		}
+		if _, ok := stored["declared"]; !ok || len(stored) != 1 {
+			t.Errorf("stored = %v, want the declared point only", stored)
+		}
+	})
 }
 
 // Measures take dimensions the same way.
