@@ -102,7 +102,14 @@ to run on a schedule (cron/systemd timer), not wired to any request path.
 ## Continuous aggregates (`migrations/0003`)
 
 Materialized views, `WITH (timescaledb.continuous)`, refreshed
-hourly:
+hourly. They use real-time aggregation (`timescaledb.materialized_only =
+false`, `migrations/0024`): a query unions the materialized buckets with an
+aggregate over the raw rows past the watermark, so data is readable as soon as
+it is ingested, including the current hour and day. Without it, TimescaleDB
+2.13+ would only show buckets ending before `now() - end_offset`, hiding the
+current UTC day until about 01:00 UTC the next day. Recreating a view resets
+the flag, so a migration that does so must set it again
+(`TestContinuousAggregatesAreRealTime` checks every view):
 
 | View | Source | Grain | Backs |
 |---|---|---|---|

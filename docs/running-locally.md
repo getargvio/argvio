@@ -178,7 +178,9 @@ Instead of (or as well as) subjects, a group claim can recognise admins:
 ## Continuous aggregates in local dev
 
 Continuous aggregates refresh on a schedule (`add_continuous_aggregate_policy`,
-hourly — see docs/schema.md). For quick local testing, without waiting:
+hourly — see docs/schema.md) and use real-time aggregation, so new data is
+readable straight away; the refresh only materializes older buckets. To
+materialize everything now, for example after loading old data:
 
 ```sql
 CALL refresh_continuous_aggregate('cagg_command_stats_hourly', NULL, NULL);
@@ -191,8 +193,8 @@ CALL refresh_continuous_aggregate('cagg_session_footprint_daily', NULL, NULL);
 ```
 
 Every `/v1/metrics/*` aggregate endpoint except `/v1/traces` reads from one
-of these four views (see docs/schema.md) — they'll return empty until at
-least one refresh has run. `/v1/metrics/retention` is the one exception:
+of these four views (see docs/schema.md). Data older than the refresh
+policies' windows only shows once a refresh has run. `/v1/metrics/retention` is the one exception:
 it reads raw `logs` directly, so it needs no refresh, only ingested data.
 
 ## API docs (dev only)
