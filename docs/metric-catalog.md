@@ -11,7 +11,8 @@ Dashboards render from it instead of from raw names. See
 next to the code that sends the metrics. Applying it *replaces* that CLI's
 catalog. A metric that left the file is marked deprecated, not deleted, and
 nothing edits a definition field by field: the metrics API serves the
-catalog read-only.
+catalog read-only, and its one write takes the whole file (see "Syncing
+from CI").
 
 ## The file
 
@@ -86,6 +87,34 @@ argvio metric list --tenant-id <TENANT_ID> [--service vulnapi] [--json]
 - a metric of that CLI missing from the file gets `deprecated_at`.
 
 `updated_by` records `--actor`, by default the OS user.
+
+## Syncing from CI
+
+Give the CLI's CI a key that can only sync catalogs:
+
+```sh
+argvio apikey create --tenant-id <TENANT_ID> --scope metrics_admin --dsn "$DSN"
+```
+
+and send the file on release:
+
+```sh
+argvio metric validate -f argvio.metrics.yaml   # optional, offline
+curl -fsS -X PUT "$ARGVIO_METRICS_URL/v1/metric-definitions/vulnapi" \
+  -H "Authorization: Bearer $ARGVIO_METRICS_ADMIN_KEY" \
+  --data-binary @argvio.metrics.yaml
+```
+
+`PUT /v1/metric-definitions/{service}` does exactly what `argvio metric
+apply` does and returns what changed (`created`, `updated`, `unchanged`,
+`deprecated`). The file's `service` must be the one in the path. It
+accepts a `metrics_admin` key or a user whose role in the tenant is `admin`;
+a `metrics_query` key or a `viewer` gets `403 insufficient_scope`, and a
+`metrics_admin` key gets the same on every read endpoint. An invalid file
+is `400 invalid_catalog` with every problem listed. The body is at most
+1 MiB. `updated_by` records the key's prefix or the user's issuer and
+subject. The endpoint isn't open to browsers (CORS stays GET-only): it is
+meant for CI.
 
 ## API
 

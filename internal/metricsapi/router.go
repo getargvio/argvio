@@ -38,8 +38,17 @@ func (s *Server) router() http.Handler {
 		r.Get("/v1/tenants", s.handleTenants)
 	})
 
+	// The metric catalog is replaced whole from a CLI's argvio.metrics.yaml,
+	// by CI with a metrics_admin key or by a tenant admin.
 	r.Group(func(r chi.Router) {
 		r.Use(s.authMiddleware)
+		r.Use(s.catalogWriteAccess)
+		r.Put("/v1/metric-definitions/{service}", s.handlePutMetricDefinitions)
+	})
+
+	r.Group(func(r chi.Router) {
+		r.Use(s.authMiddleware)
+		r.Use(s.readOnlyAccess)
 		r.Get("/v1/traces", s.handleListTraces)
 		r.Get("/v1/meta/dimensions", s.handleDimensions)
 		r.Get("/v1/metrics/latency", serveBucketed(s, "latency percentiles", storage.BucketHour, anyBucket, s.QB.LatencyPercentiles))

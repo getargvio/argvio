@@ -967,6 +967,9 @@ func TestMetricsAPI_OIDC_Live(t *testing.T) {
 		}
 	}
 	idp.AddOpaque("opaque-both", "both", nil)
+	if _, _, err := store.AddMember(ctx, acme.ID, idp.Issuer(), "owner", "admin"); err != nil {
+		t.Fatalf("AddMember admin: %v", err)
+	}
 
 	srv := NewServer(config.MetricsConfig{
 		MaxResultPageSize: 1000, DefaultResultPageSize: 100,
@@ -983,6 +986,7 @@ func TestMetricsAPI_OIDC_Live(t *testing.T) {
 		},
 	}, storage.NewQueryBuilder(pool), tenant.NewCache(store, time.Minute), testTiers, "",
 		slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
+	srv.Catalog = storage.NewWriter(pool)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -1019,6 +1023,26 @@ func TestMetricsAPI_OIDC_Live(t *testing.T) {
 
 	solo := idp.Sign(t, idp.Claims("solo"))
 	both := idp.Sign(t, idp.Claims("both"))
+
+	t.Run("only an admin member may replace a metric catalog", func(t *testing.T) {
+		put := func(token string) int {
+			req, _ := http.NewRequest("PUT", ts.URL+"/v1/metric-definitions/vulnapi",
+				strings.NewReader("version: 1\nservice: vulnapi\nmetrics:\n  - {name: vulns.found, kind: counter, title: V}\n"))
+			req.Header.Set("Authorization", "Bearer "+token)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			return resp.StatusCode
+		}
+		if code := put(idp.Sign(t, idp.Claims("owner"))); code != http.StatusOK {
+			t.Errorf("admin member = %d, want 200", code)
+		}
+		if code := put(solo); code != http.StatusForbidden {
+			t.Errorf("viewer member = %d, want 403", code)
+		}
+	})
 
 	t.Run("one membership: JWT needs no header and sees only that tenant", func(t *testing.T) {
 		if n := traceCount(t, solo, ""); n != 7 {

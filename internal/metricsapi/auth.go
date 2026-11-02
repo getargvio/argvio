@@ -9,7 +9,9 @@ import (
 
 	"github.com/getargvio/argvio/internal/authn"
 	"github.com/getargvio/argvio/internal/oidc"
+	"github.com/getargvio/argvio/internal/role"
 	"github.com/getargvio/argvio/internal/storage"
+	"github.com/getargvio/argvio/internal/tenant"
 )
 
 type ctxKey string
@@ -178,4 +180,39 @@ func bearerToken(r *http.Request) (string, bool) {
 		return "", false
 	}
 	return tok, true
+}
+
+// isCatalogKey reports whether id is a metrics_admin API key, which may
+// only sync metric catalogs.
+func isCatalogKey(id authn.Identity) bool {
+	return id.Method == authn.MethodAPIKey && id.Resolved != nil && id.Resolved.APIKey.Scope == tenant.ScopeMetricsAdmin
+}
+
+// readOnlyAccess keeps metrics_admin keys off the read endpoints: such a key
+// lives in a vendor's CI to sync a catalog, and must not read the tenant's
+// data.
+func (s *Server) readOnlyAccess(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if id, ok := identityFromContext(r.Context()); ok && isCatalogKey(id) {
+			w.Header().Set("WWW-Authenticate", `Bearer error="insufficient_scope", scope="metrics_query"`)
+			writeError(w, http.StatusForbidden, "insufficient_scope", "a metrics_admin key can only sync metric catalogs")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// catalogWriteAccess admits a metrics_admin API key or an identity with the
+// admin role in the tenant; anyone else is 403. Roles come from memberships
+// or the admin identity rules, never from the request.
+func (s *Server) catalogWriteAccess(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, ok := identityFromContext(r.Context())
+		if !ok || (!isCatalogKey(id) && id.Role != role.Admin) {
+			w.Header().Set("WWW-Authenticate", `Bearer error="insufficient_scope", scope="metrics_admin"`)
+			writeError(w, http.StatusForbidden, "insufficient_scope", "replacing a metric catalog needs a metrics_admin key or the admin role")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
