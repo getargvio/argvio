@@ -49,6 +49,10 @@ type Config struct {
 	// Vendor-metric caps; nil means "use the public server's global
 	// value" (public.max_counter_names_per_tenant and so on).
 	MetricCaps MetricCaps
+
+	// StrictMetrics rejects vendor metrics the sending CLI's catalog
+	// doesn't declare.
+	StrictMetrics bool
 }
 
 // MetricCaps are a tenant's overrides of the vendor-metric caps. Each nil

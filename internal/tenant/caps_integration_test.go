@@ -45,7 +45,8 @@ func TestMetricCaps_Live(t *testing.T) {
 	names, dims, values := 500, 4, 300
 	if err := store.UpsertConfig(ctx, Config{
 		TenantID: ten.ID, TierCeiling: "basic", TierEnforcementMode: "strip",
-		MetricCaps: MetricCaps{MaxCounterNames: &names, MaxMetricDims: &dims, MaxDimValuesPerKey: &values},
+		MetricCaps:    MetricCaps{MaxCounterNames: &names, MaxMetricDims: &dims, MaxDimValuesPerKey: &values},
+		StrictMetrics: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -54,6 +55,9 @@ func TestMetricCaps_Live(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := resolved.Config.MetricCaps
+	if !resolved.Config.StrictMetrics {
+		t.Error("strict_metrics should round-trip")
+	}
 	if c.MaxCounterNames == nil || *c.MaxCounterNames != 500 || c.MaxMetricDims == nil || *c.MaxMetricDims != 4 ||
 		c.MaxDimValuesPerKey == nil || *c.MaxDimValuesPerKey != 300 {
 		t.Errorf("set caps = %+v, want counter names 500, dims 4, dim values 300", c)

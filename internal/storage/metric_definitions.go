@@ -191,3 +191,40 @@ SELECT service_name, measure_name, 'duration' FROM %[4]s WHERE %[5]s AND measure
 func isNoRows(err error) bool {
 	return errors.Is(err, pgx.ErrNoRows)
 }
+
+// CatalogKey identifies one declared metric: the CLI (service.name) and the
+// metric name.
+type CatalogKey struct {
+	Service, Name string
+}
+
+// CatalogRule is what ingest checks a declared metric's data points against.
+type CatalogRule struct {
+	Kind    string
+	Dims    []string
+	MinTier string
+}
+
+// MetricCatalogRules returns the tenant's declared, non-deprecated metrics,
+// for ingest. A deprecated metric is treated as undeclared.
+func (w *Writer) MetricCatalogRules(ctx context.Context, tenantID uuid.UUID) (map[CatalogKey]CatalogRule, error) {
+	rows, err := w.pool.Query(ctx, `
+SELECT service_name, name, kind,
+       coalesce(ARRAY(SELECT jsonb_array_elements_text(coalesce(spec -> 'dims', '[]'::jsonb))), '{}'),
+       coalesce(spec ->> 'min_tier', '')
+FROM metric_definitions WHERE tenant_id = $1 AND deprecated_at IS NULL`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("storage: metric catalog rules: %w", err)
+	}
+	defer rows.Close()
+	out := map[CatalogKey]CatalogRule{}
+	for rows.Next() {
+		var k CatalogKey
+		var r CatalogRule
+		if err := rows.Scan(&k.Service, &k.Name, &r.Kind, &r.Dims, &r.MinTier); err != nil {
+			return nil, fmt.Errorf("storage: scan metric catalog rules: %w", err)
+		}
+		out[k] = r
+	}
+	return out, rows.Err()
+}

@@ -23,6 +23,11 @@ type Pipeline struct {
 	Writer *storage.Writer
 	Log    *slog.Logger
 	Now    func() time.Time // overridable for tests; defaults to time.Now
+	// Catalogs supplies the tenant's metric catalog rules; nil skips the
+	// catalog checks.
+	Catalogs *catalogCache
+
+	catalog map[storage.CatalogKey]storage.CatalogRule // loaded once per request
 }
 
 func (p *Pipeline) now() time.Time {

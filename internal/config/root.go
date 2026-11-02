@@ -85,6 +85,9 @@ func (r Root) ValidatePublic() error {
 	if r.Public.MaxDimValuesPerKey <= 0 {
 		errs = append(errs, "public.max_dim_values_per_key must be > 0")
 	}
+	if r.Public.MetricCatalogCacheTTL <= 0 {
+		errs = append(errs, "public.metric_catalog_cache_ttl must be > 0")
+	}
 	if r.Public.APIKeyCacheTTL <= 0 {
 		errs = append(errs, "public.api_key_cache_ttl must be > 0")
 	}

@@ -101,6 +101,7 @@ var descriptions = map[string]string{
 	"public.max_measure_labels_per_name":  "Distinct cli.measure.label values kept per measure name, per tenant. A new label past the cap is stored as \"other\" and counted in measure_overflow. Overridable per tenant in tenant_config.",
 	"public.max_metric_dims":              "Dimensions (cli.dim.<key> attributes) a cli.counter or cli.measure data point may carry, 1 to 8. A point with more is rejected, never stored without some. The dimensions are stored as one canonical tuple in the label, so max_counter_labels_per_name and max_measure_labels_per_name bound the tuples per name. Overridable per tenant in tenant_config.",
 	"public.max_dim_values_per_key":       "Distinct values kept per (counter or measure name, dimension key), per tenant. A new value past the cap is stored as \"other\" inside the tuple, keeping the other dimensions, and counted in folded_dim_values of counter_overflow or measure_overflow. Overridable per tenant in tenant_config.",
+	"public.metric_catalog_cache_ttl":     "How long ingest caches a tenant's metric catalog, the rules vendor metrics are checked against (declared dimensions, kind, min_tier, strict_metrics). A catalog change applies within it.",
 
 	"public.allowlist_schema_path": "Path to the versioned allowlist/tier schema YAML (see docs/allowlist.md). The metrics server reads it too, for the consent tier ranking.",
 	"public.allowlist_hot_reload":  "Watch allowlist_schema_path and hot-reload on change without a restart.",
@@ -168,6 +169,7 @@ func main() {
 	fmt.Println("| `rate_limit_requests_per_sec` / `rate_limit_bytes_per_sec` / `rate_limit_burst` | Override the public server's global rate-limit defaults. NULL = use global default. |")
 	fmt.Println("| `retention_traces_days` / `retention_logs_days` / `retention_metrics_days` | Shorter-than-global retention, enforced by `argvio retention sweep` (see docs/schema.md). NULL = use the global Timescale retention policy. |")
 	fmt.Println("| `max_counter_names` / `max_counter_labels_per_name` / `max_measure_names` / `max_measure_labels_per_name` / `max_metric_dims` / `max_dim_values_per_key` | Override the matching `public.max_*` vendor-metric caps (`--max-counter-names` and so on), e.g. to give one project room for many checks. Ingest reads them through the tenant cache, so a change applies within its TTL. NULL = use the global value. |")
+	fmt.Println("| `strict_metrics` | Reject vendor metrics the sending CLI's catalog (argvio.metrics.yaml) doesn't declare (`--strict-metrics`). Default false: undeclared metrics are accepted unchecked. |")
 }
 
 func printSection(header string, rows []row) {

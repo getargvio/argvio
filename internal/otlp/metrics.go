@@ -30,6 +30,9 @@ func (p *Pipeline) ProcessMetrics(ctx context.Context, md pmetric.Metrics) (acce
 
 	now := p.now()
 	var rows []storage.MetricRow
+	if err := p.loadCatalog(ctx); err != nil {
+		return 0, 0, "", err
+	}
 
 	rms := md.ResourceMetrics()
 	for i := 0; i < rms.Len(); i++ {
@@ -262,6 +265,12 @@ func (p *Pipeline) processNumberDataPoint(
 		p.Log.Warn("otlp: metric data point rejected", "reason", outcome.reason, "metric_name", metric.Name())
 		return storage.MetricRow{}, false
 	}
+	if reason := p.checkCatalog(metric.Name(), outcome.decision.KeptAttributes, outcome.decision.EffectiveTier); reason != "" {
+		*rejected++
+		*rejectionSample = reason
+		p.Log.Warn("otlp: metric data point rejected", "reason", reason, "metric_name", metric.Name())
+		return storage.MetricRow{}, false
+	}
 	if reason := p.foldDims(metric.Name(), outcome.decision.KeptAttributes, append(outcome.structDropped, outcome.decision.DroppedKeys...)); reason != "" {
 		*rejected++
 		*rejectionSample = reason
@@ -328,6 +337,12 @@ func (p *Pipeline) processHistogramDataPoint(
 		*rejected++
 		*rejectionSample = outcome.reason
 		p.Log.Warn("otlp: histogram data point rejected", "reason", outcome.reason, "metric_name", metric.Name())
+		return storage.MetricRow{}, false
+	}
+	if reason := p.checkCatalog(metric.Name(), outcome.decision.KeptAttributes, outcome.decision.EffectiveTier); reason != "" {
+		*rejected++
+		*rejectionSample = reason
+		p.Log.Warn("otlp: metric data point rejected", "reason", reason, "metric_name", metric.Name())
 		return storage.MetricRow{}, false
 	}
 	if reason := p.foldDims(metric.Name(), outcome.decision.KeptAttributes, append(outcome.structDropped, outcome.decision.DroppedKeys...)); reason != "" {

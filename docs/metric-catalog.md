@@ -116,6 +116,26 @@ is `400 invalid_catalog` with every problem listed. The body is at most
 subject. The endpoint isn't open to browsers (CORS stays GET-only): it is
 meant for CI.
 
+## What ingest does with it
+
+The public server checks every `cli.counter` and `cli.measure` data point
+against the sending CLI's catalog (matched on `service.name` and the
+metric name), after allowlist and consent-tier filtering and before its
+dimensions are folded:
+
+- **Declared metric:** dimensions not in its `dims` are dropped (and logged
+  by key), a plain label too unless `dims` lists `label`; a point sent as
+  another kind (a counter declared as a duration) is rejected; a point
+  below its `min_tier` is rejected.
+- **Undeclared metric** (or a deprecated one): accepted unchecked, so
+  instrumenting needs no setup, and listed by `argvio metric list` and the
+  API as undeclared. With the tenant's `strict_metrics` on (`argvio tenant
+  config --strict-metrics`), it is rejected instead.
+
+Rejections show in the OTLP response's `PartialSuccess` counts. Ingest
+caches each tenant's catalog for `public.metric_catalog_cache_ttl` (60s), so
+a catalog change applies within it.
+
 ## API
 
 `GET /v1/metric-definitions` (`service=` repeatable) returns the tenant's

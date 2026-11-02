@@ -35,5 +35,6 @@ func NewServer(
 		bounds:       bounds,
 		limiter:      limiter,
 		log:          log,
+		catalogs:     newCatalogCache(bounds.MetricCatalogCacheTTL, writer.MetricCatalogRules),
 	}}
 }

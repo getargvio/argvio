@@ -42,6 +42,9 @@ type PublicConfig struct {
 	MaxDimValuesPerKey int `koanf:"max_dim_values_per_key"`
 
 	APIKeyCacheTTL time.Duration `koanf:"api_key_cache_ttl"`
+	// How long ingest caches a tenant's metric catalog (the rules it checks
+	// vendor metrics against). A catalog change applies within it.
+	MetricCatalogCacheTTL time.Duration `koanf:"metric_catalog_cache_ttl"`
 
 	RateLimitRequestsPerSecond float64 `koanf:"rate_limit_requests_per_second"`
 	RateLimitBytesPerSecond    float64 `koanf:"rate_limit_bytes_per_second"`
@@ -79,7 +82,8 @@ func publicDefaults() map[string]any {
 		"public.max_metric_dims":                   3,
 		"public.max_dim_values_per_key":            50,
 
-		"public.api_key_cache_ttl": "60s",
+		"public.api_key_cache_ttl":        defaultCacheTTL,
+		"public.metric_catalog_cache_ttl": defaultCacheTTL,
 
 		"public.rate_limit_requests_per_second": 200.0,
 		"public.rate_limit_bytes_per_second":    5_000_000.0,

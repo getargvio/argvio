@@ -84,7 +84,7 @@ func authDefaults() map[string]any {
 		"auth.oidc.introspection.endpoint":           "",
 		"auth.oidc.introspection.client_id":          "",
 		"auth.oidc.introspection.client_secret":      "",
-		"auth.oidc.introspection.cache_ttl":          "60s",
+		"auth.oidc.introspection.cache_ttl":          defaultCacheTTL,
 		"auth.oidc.introspection.negative_cache_ttl": "5s",
 
 		"auth.admin.claim.name":  "",
