@@ -788,6 +788,42 @@ func TestMetricsAPI_EndToEnd_Live(t *testing.T) {
 		}
 	})
 
+	t.Run("metric definitions are the tenant's catalog, read-only", func(t *testing.T) {
+		spec := json.RawMessage(`{"name":"vulns.found","kind":"counter","title":"Vulnerabilities found"}`)
+		for _, id := range []uuid.UUID{tenantID, otherTenantID} {
+			if _, err := w.ApplyMetricDefinitions(ctx, id, "vulnapi-"+id.String()[:4], []storage.MetricDefinitionInput{{Name: "vulns.found", Kind: "counter", Spec: spec}}, "test", now); err != nil {
+				t.Fatal(err)
+			}
+		}
+		resp := get(t, "/v1/metric-definitions")
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200 without a time range", resp.StatusCode)
+		}
+		var out struct {
+			Data []storage.MetricDefinition `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			t.Fatal(err)
+		}
+		var declared []storage.MetricDefinition
+		for _, d := range out.Data {
+			if d.Declared {
+				declared = append(declared, d)
+			}
+		}
+		if len(declared) != 1 || declared[0].Service != "vulnapi-"+tenantID.String()[:4] || !strings.Contains(string(declared[0].Definition), "Vulnerabilities found") {
+			t.Errorf("declared = %+v, want only this tenant's vulns.found", declared)
+		}
+
+		resp = get(t, "/v1/metric-definitions?service=nope")
+		defer resp.Body.Close()
+		out.Data = nil
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || len(out.Data) != 0 {
+			t.Errorf("unknown service: %+v err=%v, want none", out.Data, err)
+		}
+	})
+
 	t.Run("measures list and series, tenant scoped", func(t *testing.T) {
 		at := now.Add(-2 * time.Hour)
 		var points []storage.MetricRow

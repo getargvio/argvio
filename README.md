@@ -41,6 +41,8 @@ ory/hydra's single `hydra.yml`.
 - [`docs/product-metrics-design.md`](docs/product-metrics-design.md) — design
   for per-CLI product metrics: dimensions, distributions, catalog, ratios,
   reach.
+- [`docs/metric-catalog.md`](docs/metric-catalog.md) — `argvio.metrics.yaml`,
+  the per-CLI metric catalog: format, `argvio metric` commands, API.
 - [`docs/otel-collector.md`](docs/otel-collector.md) — fan out an OTel
   Collector to Argvio and another backend at the same time.
 - [`openapi/openapi.yaml`](openapi/openapi.yaml) — the `metrics` server's

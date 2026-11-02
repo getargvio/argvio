@@ -1670,6 +1670,69 @@ paths:
           $ref: "#/components/responses/ProviderUnavailable"
         "500":
           $ref: "#/components/responses/InternalError"
+  /v1/metric-definitions:
+    parameters:
+      - $ref: "#/components/parameters/TenantHeader"
+    get:
+      summary: The metric catalog of the tenant's CLIs, with metrics sent undeclared
+      description: |
+        Every metric definition applied from the tenant's `argvio.metrics.yaml`
+        files (docs/metric-catalog.md), each under the CLI (`service`) it
+        belongs to, deprecated ones included with `deprecated_at`. Read-only:
+        the file is the source of truth and is applied with `argvio metric
+        apply`.
+
+        Also lists, with `declared: false` and no `definition`, the counters
+        and measures the tenant's CLIs sent over the last 30 days without
+        declaring them (kind `counter` or `duration`). A declared and a sent
+        metric match on service, name and kind. Takes no time range.
+      operationId: metricDefinitions
+      parameters:
+        - $ref: "#/components/parameters/Service"
+      responses:
+        "200":
+          description: Definitions, by service then name.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/MetricDefinition" }
+                required: [data]
+              example:
+                data:
+                  - service: vulnapi
+                    name: vulns.found
+                    kind: counter
+                    declared: true
+                    definition:
+                      name: vulns.found
+                      kind: counter
+                      title: Vulnerabilities found
+                      unit: "1"
+                      dims: [severity, check]
+                      direction: up_is_good
+                      dim_order: { severity: [critical, high, medium, low, info] }
+                    deprecated_at: null
+                    updated_at: "2026-10-30T09:12:00Z"
+                    updated_by: "argvio metric apply (ci)"
+                  - service: vulnapi
+                    name: rules.loaded
+                    kind: counter
+                    declared: false
+                    deprecated_at: null
+                    updated_at: null
+                    updated_by: null
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ProviderUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /v1/metrics/install-coverage:
     parameters:
       - $ref: "#/components/parameters/TenantHeader"
@@ -2739,6 +2802,22 @@ components:
         median_seconds: { type: number, description: "Median first-use minus first_seen over discoverers; negative gaps count as 0" }
       required: [kind, name, cohort_size, installs, discovered_within_1d, discovered_within_7d, discovered_within_30d, median_seconds]
 
+    MetricDefinition:
+      type: object
+      description: One metric of a CLI, declared in its catalog or only sent.
+      properties:
+        service: { type: string, description: "The CLI's service.name." }
+        name: { type: string }
+        kind: { type: string, enum: [counter, duration, value, ratio] }
+        declared: { type: boolean, description: "False for a metric the CLI sent without declaring it." }
+        definition:
+          type: object
+          description: The entry as argvio.metrics.yaml states it, defaults filled in (docs/metric-catalog.md). Absent when not declared.
+          additionalProperties: true
+        deprecated_at: { type: string, format: date-time, nullable: true, description: "When the metric left the file." }
+        updated_at: { type: string, format: date-time, nullable: true }
+        updated_by: { type: string, nullable: true }
+      required: [service, name, kind, declared, deprecated_at, updated_at, updated_by]
     VendorService:
       type: object
       description: One CLI that sent vendor metrics over the window.

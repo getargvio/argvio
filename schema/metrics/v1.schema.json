@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/getargvio/argvio/schema/metrics/v1.schema.json",
+  "title": "argvio.metrics.yaml",
+  "description": "The metric catalog of one CLI: what each of its product metrics means. Validated by `argvio metric validate`; see docs/metric-catalog.md. This schema is for editors; the server's validator (internal/catalog) is authoritative and also checks cross-references.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "service", "metrics"],
+  "properties": {
+    "version": { "const": 1 },
+    "service": {
+      "description": "The CLI's name as its SDK sends it (OTel service.name).",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "metrics": {
+      "type": "array",
+      "maxItems": 500,
+      "items": { "$ref": "#/$defs/metric" }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+    },
+    "metric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "kind", "title"],
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier" },
+        "kind": {
+          "description": "counter (cli.counter), duration (cli.measure), value (cli.value) or ratio (computed from two other series).",
+          "enum": ["counter", "duration", "value", "ratio"]
+        },
+        "title": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "description": { "type": "string", "maxLength": 1000 },
+        "unit": { "enum": ["1", "By", "%", "ms"] },
+        "dims": {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/identifier" }
+        },
+        "direction": { "enum": ["up_is_good", "down_is_good", "neutral"] },
+        "dim_order": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/identifier" }
+          }
+        },
+        "min_tier": { "enum": ["anonymous", "basic", "full", "optin_plus"] },
+        "numerator": { "$ref": "#/$defs/operand" },
+        "denominator": { "$ref": "#/$defs/operand" },
+        "scale": { "type": "number", "exclusiveMinimum": 0 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "ratio" } } },
+          "then": {
+            "required": ["numerator", "denominator"],
+            "properties": { "dims": false, "dim_order": false }
+          },
+          "else": {
+            "properties": { "numerator": false, "denominator": false, "scale": false }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "duration" } } },
+          "then": { "properties": { "unit": { "const": "ms" } } }
+        }
+      ]
+    },
+    "operand": {
+      "type": "object",
+      "additionalProperties": false,
+      "oneOf": [{ "required": ["metric"] }, { "required": ["builtin"] }],
+      "properties": {
+        "metric": { "$ref": "#/$defs/identifier" },
+        "builtin": { "enum": ["command_invocations", "sessions", "active_installs"] },
+        "where": { "type": "object", "additionalProperties": { "type": "string" } },
+        "agg": { "enum": ["sum", "count"] }
+      }
+    }
+  }
+}
