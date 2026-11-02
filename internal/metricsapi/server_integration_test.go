@@ -855,6 +855,57 @@ func TestMetricsAPI_EndToEnd_Live(t *testing.T) {
 		}
 	})
 
+	t.Run("ratios come from the catalog", func(t *testing.T) {
+		defs := []storage.MetricDefinitionInput{
+			{Name: "hits", Kind: "counter", Spec: json.RawMessage(`{"name":"hits","kind":"counter","title":"Hits"}`)},
+			{Name: "hits.per_session", Kind: "ratio", Spec: json.RawMessage(`{"name":"hits.per_session","kind":"ratio","title":"Hits per session","numerator":{"metric":"hits"},"denominator":{"builtin":"sessions"},"scale":1}`)},
+			{Name: "hits.per_hit", Kind: "ratio", Spec: json.RawMessage(`{"name":"hits.per_hit","kind":"ratio","title":"1","numerator":{"metric":"hits"},"denominator":{"metric":"hits"},"scale":100}`)},
+			{Name: "broken", Kind: "ratio", Spec: json.RawMessage(`{"name":"broken","kind":"ratio","title":"B","numerator":{"metric":"gone"},"denominator":{"metric":"hits"},"scale":1}`)},
+		}
+		if _, err := w.ApplyMetricDefinitions(ctx, tenantID, "ratio-cli", defs, "test", now); err != nil {
+			t.Fatal(err)
+		}
+		v := 4.0
+		if _, err := w.InsertMetrics(ctx, []storage.MetricRow{{Time: now.Add(-2 * time.Hour), TenantID: tenantID, MetricName: "cli.counter", MetricType: "sum",
+			Value: &v, ConsentTier: "anonymous", ResourceAttributes: storage.Attrs{"service.name": "ratio-cli"}, DatapointAttributes: storage.Attrs{"cli.counter.name": "hits"}}}); err != nil {
+			t.Fatal(err)
+		}
+		for _, cagg := range []string{"cagg_counters_hourly", "cagg_counters_daily"} {
+			if _, err := pool.Exec(ctx, `CALL refresh_continuous_aggregate($1, NULL, NULL)`, cagg); err != nil {
+				t.Fatal(err)
+			}
+		}
+		base := "/v1/metrics/ratios?from=" + url.QueryEscape(fromParam) + "&service=ratio-cli&name="
+		resp := get(t, base+"hits.per_hit")
+		defer resp.Body.Close()
+		var out struct {
+			Data struct {
+				Name  string             `json:"name"`
+				Total storage.RatioPoint `json:"total"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			t.Fatal(err)
+		}
+		if out.Data.Total.Value == nil || *out.Data.Total.Value != 100 || out.Data.Total.Numerator != 4 {
+			t.Errorf("hits.per_hit = %+v, want 4 / 4 × 100", out.Data.Total)
+		}
+		for path, want := range map[string]int{
+			base + "hits.per_session":             http.StatusOK,
+			base + "hits.per_session&bucket=hour": http.StatusBadRequest,
+			base + "hits":                         http.StatusNotFound,
+			base + "nope":                         http.StatusNotFound,
+			base + "broken":                       http.StatusNotFound,
+			"/v1/metrics/ratios?from=" + url.QueryEscape(fromParam) + "&name=hits.per_hit": http.StatusBadRequest,
+		} {
+			resp := get(t, path)
+			resp.Body.Close()
+			if resp.StatusCode != want {
+				t.Errorf("%s: status = %d, want %d", path, resp.StatusCode, want)
+			}
+		}
+	})
+
 	t.Run("measures list and series, tenant scoped", func(t *testing.T) {
 		at := now.Add(-2 * time.Hour)
 		var points []storage.MetricRow

@@ -293,9 +293,13 @@ const (
 
 // Continuous-aggregate table names referenced from multiple query paths.
 const (
+	caggCommandStatsHourly   = "cagg_command_stats_hourly"
 	caggCommandStatsDaily    = "cagg_command_stats_daily"
 	caggSessionActivityDaily = "cagg_session_activity_daily"
 )
+
+// bucketColumn is every rollup's time-bucket column.
+const bucketColumn = "bucket"
 
 // bucketRank orders granularities finest-first, so rebucket can tell
 // whether a requested granularity is recoverable from a given rollup.
@@ -316,7 +320,7 @@ func rebucket(b, grain Bucket) (string, error) {
 		return "", fmt.Errorf("storage: bucket %q is finer than this rollup's %q granularity", b, grain)
 	}
 	if b == grain {
-		return "bucket", nil
+		return bucketColumn, nil
 	}
 	return fmt.Sprintf("date_trunc('%s', bucket, 'UTC')", b), nil
 }
@@ -325,7 +329,7 @@ func rebucket(b, grain Bucket) (string, error) {
 // bucket=hour, daily (re-bucketed as needed) for everything coarser.
 func commandStatsSource(b Bucket) (table, bucketExpr string, err error) {
 	if b == BucketHour {
-		return "cagg_command_stats_hourly", "bucket", nil
+		return caggCommandStatsHourly, bucketColumn, nil
 	}
 	bucketExpr, err = rebucket(b, BucketDay)
 	return caggCommandStatsDaily, bucketExpr, err
