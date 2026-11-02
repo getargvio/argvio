@@ -38,6 +38,9 @@ ory/hydra's single `hydra.yml`.
   migrations, seeding a tenant, sending a test OTLP payload.
 - [`docs/healthcheck.md`](docs/healthcheck.md) — health endpoints and how
   to probe them (Kubernetes, compose).
+- [`docs/product-metrics-design.md`](docs/product-metrics-design.md) — design
+  for per-CLI product metrics: dimensions, distributions, catalog, ratios,
+  reach.
 - [`docs/otel-collector.md`](docs/otel-collector.md) — fan out an OTel
   Collector to Argvio and another backend at the same time.
 - [`openapi/openapi.yaml`](openapi/openapi.yaml) — the `metrics` server's
