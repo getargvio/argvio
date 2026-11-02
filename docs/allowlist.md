@@ -300,6 +300,18 @@ overridable per tenant; `value_names`, `value_labels`, `value_overflow`,
 min, max, estimated p50/p90/p99 and the hit rate, per bucket, label and
 dimension group, off `cagg_values_hourly` / `cagg_values_daily`.
 
+## Reach (`cli.install_id` on vendor metrics)
+
+At basic tier and above, the SDKs attach `cli.install_id` to `cli.counter`,
+`cli.measure` and `cli.value` data points (it's stripped below basic, like
+everywhere else). It is one value per process, so in-memory aggregation
+doesn't grow. The rollups keep a HyperLogLog sketch of it and how many data
+points carried one (`migrations/0022`), never the ids themselves, and
+`reach=true` on the detail endpoints returns installs reached, the share of
+data points that reported one, and the share of the tenant's active
+installs. Because anonymous points never carry an id, installs reached is a
+**lower bound**; no endpoint lists install ids.
+
 ## Dimensions (`cli.dim.*`)
 
 > **Warning: dimensions are accepted at the `anonymous` tier**, like the

@@ -27,6 +27,9 @@ func ValidDimKey(s string) bool {
 type DimQuery struct {
 	GroupBy []string
 	Where   map[string][]string
+	// Reach also counts the installs behind the series (Reach, and
+	// InstallsReached per bucket and group).
+	Reach bool
 }
 
 // Validate checks the keys and values against the identifier rule and the
@@ -122,4 +125,13 @@ func groupKey(values []*string) string {
 		b = append(b, 0xff)
 	}
 	return string(b)
+}
+
+// groupKeyOf is groupKey for a group's Dims, in dq.GroupBy order.
+func (d DimQuery) groupKeyOf(dims map[string]*string) string {
+	values := make([]*string, len(d.GroupBy))
+	for i, k := range d.GroupBy {
+		values[i] = dims[k]
+	}
+	return groupKey(values)
 }

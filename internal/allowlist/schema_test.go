@@ -307,8 +307,13 @@ func TestCounterMetric(t *testing.T) {
 			t.Errorf("cli.counter should allow %s", k)
 		}
 	}
-	if slices.Contains(m.AllowedAttributes, "cli.install_id") || slices.Contains(m.AllowedAttributes, "cli.session_id") {
-		t.Error("cli.counter must not carry install or session ids")
+	// Never a session id; an install id only for reach, at basic tier and
+	// above (its definition's min_tier), never anonymously.
+	if slices.Contains(m.AllowedAttributes, "cli.session_id") {
+		t.Error("cli.counter must not carry session ids")
+	}
+	if install, _ := s.AttrDefFor("cli.install_id"); install.MinTier != "basic" {
+		t.Errorf("cli.install_id min_tier = %q, want basic, since cli.counter carries it", install.MinTier)
 	}
 
 	anonymous, _ := s.TierRank("anonymous")
@@ -389,8 +394,13 @@ func TestMeasureMetric(t *testing.T) {
 			t.Errorf("cli.measure should allow %s", k)
 		}
 	}
-	if slices.Contains(m.AllowedAttributes, "cli.install_id") || slices.Contains(m.AllowedAttributes, "cli.session_id") {
-		t.Error("cli.measure must not carry install or session ids")
+	// Never a session id; an install id only for reach, at basic tier and
+	// above (its definition's min_tier), never anonymously.
+	if slices.Contains(m.AllowedAttributes, "cli.session_id") {
+		t.Error("cli.measure must not carry session ids")
+	}
+	if install, _ := s.AttrDefFor("cli.install_id"); install.MinTier != "basic" {
+		t.Errorf("cli.install_id min_tier = %q, want basic, since cli.measure carries it", install.MinTier)
 	}
 
 	anonymous, _ := s.TierRank("anonymous")

@@ -192,8 +192,8 @@ func serveVendorInstrument[L, D any](
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
-		if instrument == "" && (len(dq.GroupBy) > 0 || len(dq.Where) > 0) {
-			writeError(w, http.StatusBadRequest, "invalid_request", "group_by and where require name")
+		if instrument == "" && (len(dq.GroupBy) > 0 || len(dq.Where) > 0 || dq.Reach) {
+			writeError(w, http.StatusBadRequest, "invalid_request", "group_by, where and reach require name")
 			return
 		}
 		ctx, cancel := s.withQuery(r.Context())
@@ -457,7 +457,7 @@ func (s *Server) handleDimensions(w http.ResponseWriter, r *http.Request) {
 // (multi-value; values of one key are ORed, keys ANDed) for the vendor
 // instrument series.
 func parseDimQuery(q url.Values) (storage.DimQuery, error) {
-	dq := storage.DimQuery{GroupBy: multiParam(q, "group_by"), Where: map[string][]string{}}
+	dq := storage.DimQuery{GroupBy: multiParam(q, "group_by"), Where: map[string][]string{}, Reach: boolParam(q, "reach") != nil && *boolParam(q, "reach")}
 	for _, kv := range multiParam(q, "where") {
 		k, v, ok := strings.Cut(kv, ":")
 		if !ok {

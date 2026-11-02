@@ -101,6 +101,8 @@ type CounterPoint struct {
 	Bucket         time.Time `json:"bucket"`
 	Total          float64   `json:"total"`
 	DatapointCount int64     `json:"datapoint_count"`
+	// InstallsReached is set with reach=true: distinct installs behind it.
+	InstallsReached *int64 `json:"installs_reached,omitempty"`
 }
 
 // CounterLabelTotal is one label's total over the query window. Label is nil
@@ -117,6 +119,8 @@ type CounterGroup struct {
 	Dims   map[string]*string `json:"dims"`
 	Total  float64            `json:"total"`
 	Series []CounterPoint     `json:"series"`
+	// InstallsReached is set with reach=true: distinct installs behind it.
+	InstallsReached *int64 `json:"installs_reached,omitempty"`
 }
 
 // CounterDetail is the response of CounterSeries. Groups is only set when the
@@ -126,6 +130,7 @@ type CounterDetail struct {
 	Series []CounterPoint      `json:"series"`
 	Labels []CounterLabelTotal `json:"labels"`
 	Groups []CounterGroup      `json:"groups,omitempty"`
+	Reach  *Reach              `json:"reach,omitempty"`
 }
 
 // CounterSeries returns one counter's total per bucket, narrowed to one label
@@ -207,11 +212,28 @@ LIMIT %s`, table, pb.where(), limitPh)
 		return CounterDetail{}, fmt.Errorf("storage: counter labels: %w", err)
 	}
 
-	if len(dq.GroupBy) == 0 {
+	if len(dq.GroupBy) > 0 {
+		if out.Groups, err = q.counterGroups(ctx, table, bucketExpr, predicates(true), dq, clampLimit(f.Limit)); err != nil {
+			return out, err
+		}
+	}
+	if !dq.Reach {
 		return out, nil
 	}
-	out.Groups, err = q.counterGroups(ctx, table, bucketExpr, predicates(true), dq, clampLimit(f.Limit))
-	return out, err
+	r, err := q.reach(ctx, scope, f, table, bucketExpr, "counter_label", func() *predicateBuilder { return predicates(true) }, dq)
+	if err != nil {
+		return out, err
+	}
+	out.Reach = &r.window
+	for i := range out.Series {
+		n := r.perBucket[out.Series[i].Bucket]
+		out.Series[i].InstallsReached = &n
+	}
+	for i := range out.Groups {
+		n := r.perGroup[dq.groupKeyOf(out.Groups[i].Dims)]
+		out.Groups[i].InstallsReached = &n
+	}
+	return out, nil
 }
 
 // counterGroups breaks a counter's series down by dq.GroupBy, largest total
