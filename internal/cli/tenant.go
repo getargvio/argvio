@@ -63,7 +63,7 @@ func newTenantConfigCommand() *cobra.Command {
 		rateRPS, rateBPS                        float64
 		rateBurst                               int
 		retTraces, retLogs, retMetrics          int
-		caps                                    [6]int
+		caps                                    [8]int
 		strictMetrics                           bool
 	)
 	cmd := &cobra.Command{
@@ -118,6 +118,7 @@ func newTenantConfigCommand() *cobra.Command {
 				&cfg.MetricCaps.MaxCounterNames, &cfg.MetricCaps.MaxCounterLabelsPerName,
 				&cfg.MetricCaps.MaxMeasureNames, &cfg.MetricCaps.MaxMeasureLabelsPerName,
 				&cfg.MetricCaps.MaxMetricDims, &cfg.MetricCaps.MaxDimValuesPerKey,
+				&cfg.MetricCaps.MaxValueNames, &cfg.MetricCaps.MaxValueLabelsPerName,
 			} {
 				if caps[i] > 0 {
 					*p = &caps[i]
@@ -151,6 +152,8 @@ func newTenantConfigCommand() *cobra.Command {
 	cmd.Flags().IntVar(&caps[3], "max-measure-labels-per-name", 0, "override public.max_measure_labels_per_name (0 = use global default)")
 	cmd.Flags().IntVar(&caps[4], "max-metric-dims", 0, "override public.max_metric_dims, 1 to 8 (0 = use global default)")
 	cmd.Flags().BoolVar(&strictMetrics, "strict-metrics", false, "reject vendor metrics the sending CLI's catalog (argvio.metrics.yaml) doesn't declare")
+	cmd.Flags().IntVar(&caps[6], "max-value-names", 0, "override public.max_value_names_per_tenant (0 = use global default)")
+	cmd.Flags().IntVar(&caps[7], "max-value-labels-per-name", 0, "override public.max_value_labels_per_name (0 = use global default)")
 	cmd.Flags().IntVar(&caps[5], "max-dim-values-per-key", 0, "override public.max_dim_values_per_key (0 = use global default)")
 	return cmd
 }

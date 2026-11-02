@@ -16,6 +16,7 @@ func TestMetricCapsResolution(t *testing.T) {
 	want := metricCaps{
 		counterNames: 7, counterLabels: 50, // override, then global
 		measureNames: defaultMaxMeasureNames, measureLabels: defaultMaxMeasureLabels, // neither: the default
+		valueNames: defaultMaxValueNames, valueLabels: defaultMaxValueLabels,
 		dims: 5, dimValues: defaultMaxDimValuesPerKey,
 	}
 	if got != want {

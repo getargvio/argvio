@@ -82,6 +82,9 @@ func (r Root) ValidatePublic() error {
 	if r.Public.MaxMetricDims <= 0 || r.Public.MaxMetricDims > MaxMetricDimsLimit {
 		errs = append(errs, fmt.Sprintf("public.max_metric_dims must be between 1 and %d", MaxMetricDimsLimit))
 	}
+	if r.Public.MaxValueNamesPerTenant <= 0 || r.Public.MaxValueLabelsPerName <= 0 {
+		errs = append(errs, "public.max_value_names_per_tenant and max_value_labels_per_name must be > 0")
+	}
 	if r.Public.MaxDimValuesPerKey <= 0 {
 		errs = append(errs, "public.max_dim_values_per_key must be > 0")
 	}

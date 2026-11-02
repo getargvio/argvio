@@ -64,6 +64,8 @@ type MetricCaps struct {
 	MaxMeasureLabelsPerName *int
 	MaxMetricDims           *int
 	MaxDimValuesPerKey      *int
+	MaxValueNames           *int
+	MaxValueLabelsPerName   *int
 }
 
 // APIKey is a row from api_keys. RawKey is only ever populated at creation

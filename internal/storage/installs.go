@@ -394,6 +394,16 @@ func sweepInstalls(ctx context.Context, pool *pgxpool.Pool, days int, tenantPred
 		WHERE n.tenant_id = measure_dim_values.tenant_id AND n.measure_name = measure_dim_values.measure_name)) AND `+tenantPred, cutoff, tenantArg); err != nil {
 		return 0, fmt.Errorf("storage: sweep measure dimension values: %w", err)
 	}
+	// And value names, labels and dimension values.
+	if _, err := tx.Exec(ctx, `DELETE FROM value_names WHERE last_seen < $1 AND `+tenantPred, cutoff, tenantArg); err != nil {
+		return 0, fmt.Errorf("storage: sweep value names: %w", err)
+	}
+	for _, table := range []string{"value_labels", "value_dim_values"} {
+		if _, err := tx.Exec(ctx, `DELETE FROM `+table+` WHERE (last_seen < $1 OR NOT EXISTS (SELECT 1 FROM value_names n
+		WHERE n.tenant_id = `+table+`.tenant_id AND n.value_name = `+table+`.value_name)) AND `+tenantPred, cutoff, tenantArg); err != nil {
+			return 0, fmt.Errorf("storage: sweep %s: %w", table, err)
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("storage: sweep installs: %w", err)
 	}

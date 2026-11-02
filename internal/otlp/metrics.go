@@ -123,6 +123,9 @@ func (p *Pipeline) ProcessMetrics(ctx context.Context, md pmetric.Metrics) (acce
 		if err := p.capMeasures(ctx, rows); err != nil {
 			return 0, int64(md.DataPointCount()), "", err
 		}
+		if err := p.capValues(ctx, rows); err != nil {
+			return 0, int64(md.DataPointCount()), "", err
+		}
 		if _, werr := p.Writer.InsertMetrics(ctx, rows); werr != nil {
 			return 0, int64(md.DataPointCount()), "", werr
 		}

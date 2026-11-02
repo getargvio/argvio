@@ -11,14 +11,20 @@ var MeasureBounds = []float64{1, 5, 10, 50, 100, 500, 1000, 5000, 10000, 60000, 
 // MeasureBucketCount is how many buckets MeasureBounds makes.
 const MeasureBucketCount = 12
 
-// measureQuantile estimates the q-quantile (0 < q <= 1) of the observations
-// behind counts, one per bucket of MeasureBounds, by interpolating linearly
-// inside the bucket the rank falls in. The estimate is only as precise as the
-// bucket is narrow: it can't be off by more than the bucket's width. The
-// first bucket is taken to start at min and the last to end at max when
-// those are known, else at 0 and at the last bound; the result is clamped to
-// [min, max]. nil if there are no observations.
+// measureQuantile is histQuantile over MeasureBounds.
 func measureQuantile(counts [MeasureBucketCount]int64, min, max *float64, q float64) *float64 {
+	return histQuantile(MeasureBounds, counts[:], min, max, q)
+}
+
+// histQuantile estimates the q-quantile (0 < q <= 1) of the observations
+// behind counts, one per bucket of bounds (len(bounds)+1 of them), by
+// interpolating linearly inside the bucket the rank falls in. The estimate is
+// only as precise as the bucket is narrow: it can't be off by more than the
+// bucket's width. The first bucket is taken to start at min when that is
+// below its bound, else at the bound itself (so a first bucket of (-inf, 0]
+// reads as exactly 0), and the last to end at max when known; the result is
+// clamped to [min, max]. nil if there are no observations.
+func histQuantile(bounds []float64, counts []int64, min, max *float64, q float64) *float64 {
 	var total int64
 	for _, c := range counts {
 		total += c
@@ -37,13 +43,16 @@ func measureQuantile(counts [MeasureBucketCount]int64, min, max *float64, q floa
 			continue
 		}
 		var lower, upper float64
-		if i > 0 {
-			lower = MeasureBounds[i-1]
-		} else if min != nil && *min < MeasureBounds[0] {
+		switch {
+		case i > 0:
+			lower = bounds[i-1]
+		case min != nil && *min < bounds[0]:
 			lower = *min
+		case bounds[0] <= 0:
+			lower = bounds[0]
 		}
-		if i < len(MeasureBounds) {
-			upper = MeasureBounds[i]
+		if i < len(bounds) {
+			upper = bounds[i]
 		} else {
 			upper = lower
 			if max != nil && *max > lower {
