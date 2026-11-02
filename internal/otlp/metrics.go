@@ -262,6 +262,12 @@ func (p *Pipeline) processNumberDataPoint(
 		p.Log.Warn("otlp: metric data point rejected", "reason", outcome.reason, "metric_name", metric.Name())
 		return storage.MetricRow{}, false
 	}
+	if reason := p.foldDims(metric.Name(), outcome.decision.KeptAttributes, append(outcome.structDropped, outcome.decision.DroppedKeys...)); reason != "" {
+		*rejected++
+		*rejectionSample = reason
+		p.Log.Warn("otlp: metric data point rejected", "reason", reason, "metric_name", metric.Name())
+		return storage.MetricRow{}, false
+	}
 
 	kept := outcome.decision.KeptAttributes
 	promo := popPromoted(kept)
@@ -322,6 +328,12 @@ func (p *Pipeline) processHistogramDataPoint(
 		*rejected++
 		*rejectionSample = outcome.reason
 		p.Log.Warn("otlp: histogram data point rejected", "reason", outcome.reason, "metric_name", metric.Name())
+		return storage.MetricRow{}, false
+	}
+	if reason := p.foldDims(metric.Name(), outcome.decision.KeptAttributes, append(outcome.structDropped, outcome.decision.DroppedKeys...)); reason != "" {
+		*rejected++
+		*rejectionSample = reason
+		p.Log.Warn("otlp: histogram data point rejected", "reason", reason, "metric_name", metric.Name())
 		return storage.MetricRow{}, false
 	}
 

@@ -278,6 +278,55 @@ the bucket is narrow (a p95 of 700 ms means somewhere in 500-1000 ms) and
 clamped to the observed min and max. Changing the bounds takes a new
 migration, since the rollups have one column per bucket.
 
+## Dimensions (`cli.dim.*`)
+
+> **Warning: dimensions are accepted at the `anonymous` tier**, like the
+> counters and measures they break down. Keys and values must be fixed
+> identifiers chosen in the CLI's code (a severity, a check id), never user
+> input or anything derived from it.
+
+One label can't say "vulnerabilities by severity **and** by check". So a
+`cli.counter` or `cli.measure` data point may carry up to
+`public.max_metric_dims` (default 3) named dimensions as `cli.dim.<key>`
+attributes: `cli.dim.severity=high`, `cli.dim.check=bola`.
+
+`cli.dim.*` is an **attribute family**: a key ending in `.*` under
+`attributes:` stands for every key with that prefix whose remainder matches
+its `key_pattern`, and listing the family key in a metric's
+`allowed_attributes` accepts all of them. Every member gets the family's
+type, value `pattern`, `max_length` and `min_tier`. A family must have a
+`key_pattern`, and only a family may.
+
+At ingest (`internal/otlp/dims.go`), after allowlist filtering:
+
+1. A point is **rejected**, never stored without the dimension, if a
+   `cli.dim.*` attribute was dropped (invalid key or value, too long), if it
+   has more than `public.max_metric_dims` dimensions, or if it has both a
+   `cli.dim.label` and a label. Storing it without one would merge it into
+   another series.
+2. The dimensions are folded into one **canonical tuple**, keys sorted,
+   `check=bola;severity=high`, stored as the point's label; the `cli.dim.*`
+   attributes are not stored. A label sent next to dimensions becomes the
+   dimension `label` (`label=bearer;severity=low`). A point with a label and
+   no dimensions is stored exactly as before, and reads as the dimension
+   `label`.
+3. Each dimension value is checked against the tenant's vocabulary
+   (`counter_dim_values` / `measure_dim_values`): at most
+   `public.max_dim_values_per_key` distinct values per (name, key). A new
+   value past the cap is stored as `other` **inside the tuple**
+   (`check=other;severity=high`), so the other dimensions keep their exact
+   breakdown, and the point is counted in `folded_dim_values`.
+4. The tuple then goes through the label cap as any label does: the
+   `*_labels_per_name` caps bound the tuples per name. A tuple past it is
+   stored as `other`, which reads as `other` for every dimension.
+
+The rollups need no change: they already group by label. With `name=`,
+`/v1/metrics/counters` and `/v1/metrics/measures` take `group_by=<key>` (up
+to two keys) to add `groups`, each with its dimension values, window total
+or statistics and series, and `where=<key>:<value>` (repeatable; values of a
+key are ORed, keys ANDed) to narrow the series, labels and groups. A point
+without the grouped key is in the group whose value is `null`.
+
 ## Unknown commands (`cli.command.unknown`)
 
 > **Warning: a mistyped command is arbitrary user input.** It can be a typo of

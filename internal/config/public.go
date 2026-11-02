@@ -31,6 +31,15 @@ type PublicConfig struct {
 	// (internal/otlp/measures.go).
 	MaxMeasureNamesPerTenant int `koanf:"max_measure_names_per_tenant"`
 	MaxMeasureLabelsPerName  int `koanf:"max_measure_labels_per_name"`
+	// Dimensions (cli.dim.<key> attributes) a cli.counter or cli.measure
+	// data point may carry; a point with more is rejected, never truncated.
+	// Their canonical tuple is stored as the label, so the *_labels_per_name
+	// caps above bound the tuples per name.
+	MaxMetricDims int `koanf:"max_metric_dims"`
+	// Distinct values kept per (counter or measure name, dimension key); past
+	// it, new ones are stored as "other" inside the tuple
+	// (internal/otlp/dims.go).
+	MaxDimValuesPerKey int `koanf:"max_dim_values_per_key"`
 
 	APIKeyCacheTTL time.Duration `koanf:"api_key_cache_ttl"`
 
@@ -67,6 +76,8 @@ func publicDefaults() map[string]any {
 		"public.max_counter_labels_per_name":       50,
 		"public.max_measure_names_per_tenant":      100,
 		"public.max_measure_labels_per_name":       50,
+		"public.max_metric_dims":                   3,
+		"public.max_dim_values_per_key":            50,
 
 		"public.api_key_cache_ttl": "60s",
 

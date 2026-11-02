@@ -42,19 +42,20 @@ type vocabulary struct {
 	noun       string // singular; for error messages and the advisory lock key
 	names      string // table: tenant_id, <nameCol>, first_seen, last_seen
 	labels     string // table: tenant_id, <nameCol>, label, first_seen, last_seen
-	overflow   string // table: tenant_id, folded_names, folded_labels, last_folded_at
+	overflow   string // table: tenant_id, folded_names, folded_labels, folded_dim_values, last_folded_at
+	dims       string // table: tenant_id, <nameCol>, dim_key, dim_value, first_seen, last_seen
 	nameColumn string
 }
 
 // sql fills the {names}, {labels}, {overflow}, {name} and {noun} placeholders
 // of a statement with v's identifiers.
 func (v vocabulary) sql(stmt string) string {
-	return strings.NewReplacer("{names}", v.names, "{labels}", v.labels, "{overflow}", v.overflow,
+	return strings.NewReplacer("{names}", v.names, "{labels}", v.labels, "{overflow}", v.overflow, "{dims}", v.dims,
 		"{name}", v.nameColumn, "{noun}", v.noun).Replace(stmt)
 }
 
 var counterVocabulary = vocabulary{
-	noun: "counter", names: "counter_names", labels: "counter_labels", overflow: "counter_overflow", nameColumn: "counter_name",
+	noun: "counter", names: "counter_names", labels: "counter_labels", overflow: "counter_overflow", dims: "counter_dim_values", nameColumn: "counter_name",
 }
 
 // AdmitCounters decides which of one tenant's counter names and labels may be

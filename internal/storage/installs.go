@@ -378,6 +378,10 @@ func sweepInstalls(ctx context.Context, pool *pgxpool.Pool, days int, tenantPred
 		WHERE n.tenant_id = counter_labels.tenant_id AND n.counter_name = counter_labels.counter_name)) AND `+tenantPred, cutoff, tenantArg); err != nil {
 		return 0, fmt.Errorf("storage: sweep counter labels: %w", err)
 	}
+	if _, err := tx.Exec(ctx, `DELETE FROM counter_dim_values WHERE (last_seen < $1 OR NOT EXISTS (SELECT 1 FROM counter_names n
+		WHERE n.tenant_id = counter_dim_values.tenant_id AND n.counter_name = counter_dim_values.counter_name)) AND `+tenantPred, cutoff, tenantArg); err != nil {
+		return 0, fmt.Errorf("storage: sweep counter dimension values: %w", err)
+	}
 	// And measure names and labels.
 	if _, err := tx.Exec(ctx, `DELETE FROM measure_names WHERE last_seen < $1 AND `+tenantPred, cutoff, tenantArg); err != nil {
 		return 0, fmt.Errorf("storage: sweep measure names: %w", err)
@@ -385,6 +389,10 @@ func sweepInstalls(ctx context.Context, pool *pgxpool.Pool, days int, tenantPred
 	if _, err := tx.Exec(ctx, `DELETE FROM measure_labels WHERE (last_seen < $1 OR NOT EXISTS (SELECT 1 FROM measure_names n
 		WHERE n.tenant_id = measure_labels.tenant_id AND n.measure_name = measure_labels.measure_name)) AND `+tenantPred, cutoff, tenantArg); err != nil {
 		return 0, fmt.Errorf("storage: sweep measure labels: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM measure_dim_values WHERE (last_seen < $1 OR NOT EXISTS (SELECT 1 FROM measure_names n
+		WHERE n.tenant_id = measure_dim_values.tenant_id AND n.measure_name = measure_dim_values.measure_name)) AND `+tenantPred, cutoff, tenantArg); err != nil {
+		return 0, fmt.Errorf("storage: sweep measure dimension values: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("storage: sweep installs: %w", err)

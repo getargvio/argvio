@@ -33,6 +33,7 @@ type vendorInstrument struct {
 	// Config keys of the two caps, for the log line when they fold.
 	nameLimitKey, labelLimitKey string
 	admit                       func(ctx context.Context, tenantID uuid.UUID, counts map[storage.CounterKey]int64, nameLimit, labelLimit int, at time.Time) (storage.CounterAdmission, error)
+	dimAdmitters
 }
 
 // capCounters rewrites the counter name or label of every cli.counter row
@@ -54,13 +55,19 @@ func (p *Pipeline) capCounters(ctx context.Context, rows []storage.MetricRow) er
 		metric: metricCounter, nameAttr: attrCounterName, labelAttr: attrCounterLabel,
 		nameLimit: nameLimit, labelLimit: labelLimit,
 		nameLimitKey: "max_counter_names_per_tenant", labelLimitKey: "max_counter_labels_per_name",
-		admit: p.Writer.AdmitCounters,
+		admit:        p.Writer.AdmitCounters,
+		dimAdmitters: dimAdmitters{p.Writer.AdmitCounterDims, p.Writer.RecordFoldedCounterDims},
 	})
 }
 
 // capVendorInstrument is the cap shared by the vendor instruments, applied to
 // the rows of in.metric.
 func (p *Pipeline) capVendorInstrument(ctx context.Context, rows []storage.MetricRow, in vendorInstrument) error {
+	// Dimension values first, so the label cap counts the tuples as they
+	// will be stored.
+	if err := p.capDimValues(ctx, rows, in); err != nil {
+		return err
+	}
 	counts := map[storage.CounterKey]int64{}
 	for _, r := range rows {
 		if r.MetricName != in.metric {

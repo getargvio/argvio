@@ -141,7 +141,7 @@ func EvaluateEvent(
 		if k == TierAttrKey {
 			continue // handled separately, not stored as a generic attribute
 		}
-		if _, ok := allowed[k]; !ok {
+		if !schema.IsAllowed(allowed, k) {
 			if schema.IsStandardResourceAttribute(k) {
 				kept[k] = v
 				continue

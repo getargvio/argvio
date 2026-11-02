@@ -19,7 +19,7 @@ type (
 )
 
 var measureVocabulary = vocabulary{
-	noun: "measure", names: "measure_names", labels: "measure_labels", overflow: "measure_overflow", nameColumn: "measure_name",
+	noun: "measure", names: "measure_names", labels: "measure_labels", overflow: "measure_overflow", dims: "measure_dim_values", nameColumn: "measure_name",
 }
 
 // AdmitMeasures is AdmitCounters for cli.measure names and labels, against

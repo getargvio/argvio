@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -80,9 +81,12 @@ type MeasureSummary struct {
 // public.max_measure_names_per_tenant, FoldedLabels past
 // public.max_measure_labels_per_name. LastFoldedAt is nil if none ever were.
 type MeasureOverflow struct {
-	FoldedNames  int64      `json:"folded_names"`
-	FoldedLabels int64      `json:"folded_labels"`
-	LastFoldedAt *time.Time `json:"last_folded_at"`
+	FoldedNames  int64 `json:"folded_names"`
+	FoldedLabels int64 `json:"folded_labels"`
+	// FoldedDimValues counts the data points with at least one dimension
+	// value stored as "other", past public.max_dim_values_per_key.
+	FoldedDimValues int64      `json:"folded_dim_values"`
+	LastFoldedAt    *time.Time `json:"last_folded_at"`
 }
 
 // MeasureList is the response of Measures.
@@ -127,8 +131,8 @@ LIMIT %s OFFSET %s`, measureAggregates, caggMeasuresDaily, pb.where(), limitPh, 
 		return MeasureList{}, fmt.Errorf("storage: measures: %w", err)
 	}
 
-	err = q.pool.QueryRow(ctx, `SELECT folded_names, folded_labels, last_folded_at FROM measure_overflow WHERE tenant_id = $1`, scope.tenantID).
-		Scan(&out.Overflow.FoldedNames, &out.Overflow.FoldedLabels, &out.Overflow.LastFoldedAt)
+	err = q.pool.QueryRow(ctx, `SELECT folded_names, folded_labels, folded_dim_values, last_folded_at FROM measure_overflow WHERE tenant_id = $1`, scope.tenantID).
+		Scan(&out.Overflow.FoldedNames, &out.Overflow.FoldedLabels, &out.Overflow.FoldedDimValues, &out.Overflow.LastFoldedAt)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return MeasureList{}, fmt.Errorf("storage: measure overflow: %w", err)
 	}
@@ -148,11 +152,22 @@ type MeasureLabelStats struct {
 	MeasureStats
 }
 
-// MeasureDetail is the response of MeasureSeries.
+// MeasureGroup is one combination of the grouped-by dimension values: its
+// statistics over the window and its series. A nil value in Dims is data
+// points that don't carry that dimension.
+type MeasureGroup struct {
+	Dims map[string]*string `json:"dims"`
+	MeasureStats
+	Series []MeasurePoint `json:"series"`
+}
+
+// MeasureDetail is the response of MeasureSeries. Groups is only set when the
+// query groups by dimensions.
 type MeasureDetail struct {
 	Name   string              `json:"name"`
 	Series []MeasurePoint      `json:"series"`
 	Labels []MeasureLabelStats `json:"labels"`
+	Groups []MeasureGroup      `json:"groups,omitempty"`
 }
 
 // MeasureSeries returns one measure's statistics per bucket, narrowed to one
@@ -161,8 +176,9 @@ type MeasureDetail struct {
 // labels. Both read the same rollup, so the label counts add up to the series
 // count (without a label filter). Percentiles are estimated from summed
 // bucket counts, so they are those of the window or bucket, never an average
-// of percentiles.
-func (q *QueryBuilder) MeasureSeries(ctx context.Context, scope TenantScope, f Filters, name string, label *string, bucket Bucket) (MeasureDetail, error) {
+// of percentiles. dq.Where narrows the series and the labels by dimension
+// values; dq.GroupBy adds Groups, most recorded first, capped by f.Limit.
+func (q *QueryBuilder) MeasureSeries(ctx context.Context, scope TenantScope, f Filters, name string, label *string, dq DimQuery, bucket Bucket) (MeasureDetail, error) {
 	table, grain := caggMeasuresHourly, BucketHour
 	if bucket != BucketHour {
 		table, grain = caggMeasuresDaily, BucketDay
@@ -172,12 +188,17 @@ func (q *QueryBuilder) MeasureSeries(ctx context.Context, scope TenantScope, f F
 		return MeasureDetail{}, err
 	}
 	out := MeasureDetail{Name: name, Series: []MeasurePoint{}, Labels: []MeasureLabelStats{}}
-
-	pb := vendorPredicates(scope, f)
-	pb.add("measure_name = $%d", name)
-	if label != nil {
-		pb.add("measure_label = $%d", *label)
+	predicates := func(withLabel bool) *predicateBuilder {
+		pb := vendorPredicates(scope, f)
+		pb.add("measure_name = $%d", name)
+		if withLabel && label != nil {
+			pb.add("measure_label = $%d", *label)
+		}
+		dq.addWhere(pb, "measure_label")
+		return pb
 	}
+
+	pb := predicates(true)
 	limitPh := pb.nextPlaceholder(clampLimit(f.Limit))
 	offsetPh := pb.nextPlaceholder(f.Offset)
 	sql := fmt.Sprintf(`
@@ -206,8 +227,7 @@ LIMIT %s OFFSET %s`, bucketExpr, measureAggregates, table, pb.where(), limitPh, 
 		return MeasureDetail{}, fmt.Errorf("storage: measure series: %w", err)
 	}
 
-	pb = vendorPredicates(scope, f)
-	pb.add("measure_name = $%d", name)
+	pb = predicates(false)
 	limitPh = pb.nextPlaceholder(clampLimit(f.Limit))
 	sql = fmt.Sprintf(`
 SELECT measure_label, %s
@@ -220,15 +240,110 @@ LIMIT %s`, measureAggregates, table, pb.where(), limitPh)
 	if err != nil {
 		return MeasureDetail{}, fmt.Errorf("storage: measure labels: %w", err)
 	}
-	defer rows.Close()
 	for rows.Next() {
 		var l MeasureLabelStats
 		var a measureAgg
 		if err := rows.Scan(append([]any{&l.Label}, a.dest()...)...); err != nil {
+			rows.Close()
 			return MeasureDetail{}, fmt.Errorf("storage: scan measure labels: %w", err)
 		}
 		l.MeasureStats = a.stats()
 		out.Labels = append(out.Labels, l)
 	}
-	return out, rows.Err()
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return MeasureDetail{}, fmt.Errorf("storage: measure labels: %w", err)
+	}
+
+	if len(dq.GroupBy) == 0 {
+		return out, nil
+	}
+	out.Groups, err = q.measureGroups(ctx, table, bucketExpr, predicates(true), dq, clampLimit(f.Limit))
+	return out, err
+}
+
+// measureGroups breaks a measure's series down by dq.GroupBy, most recorded
+// first, keeping at most limit groups. A group's window statistics merge its
+// buckets' histograms, so its percentiles are those of the whole window.
+func (q *QueryBuilder) measureGroups(ctx context.Context, table, bucketExpr string, pb *predicateBuilder, dq DimQuery, limit int) ([]MeasureGroup, error) {
+	exprs := dq.groupExprs(pb, "measure_label")
+	cols := ""
+	for i, e := range exprs {
+		cols += fmt.Sprintf(", %s AS g%d", e, i)
+	}
+	sql := fmt.Sprintf(`
+SELECT %s AS bucket%s, %s
+FROM %s
+WHERE %s
+GROUP BY %s
+ORDER BY 1 ASC`, bucketExpr, cols, measureAggregates, table, pb.where(), groupByOrdinals(1+len(exprs)))
+	rows, err := q.pool.Query(ctx, sql, pb.args...)
+	if err != nil {
+		return nil, fmt.Errorf("storage: measure groups: %w", err)
+	}
+	defer rows.Close()
+	index := map[string]int{}
+	var groups []MeasureGroup
+	var totals []measureAgg
+	for rows.Next() {
+		var p MeasurePoint
+		var a measureAgg
+		values := make([]*string, len(exprs))
+		dest := []any{&p.Bucket}
+		for i := range values {
+			dest = append(dest, &values[i])
+		}
+		if err := rows.Scan(append(dest, a.dest()...)...); err != nil {
+			return nil, fmt.Errorf("storage: scan measure groups: %w", err)
+		}
+		p.MeasureStats = a.stats()
+		key := groupKey(values)
+		i, ok := index[key]
+		if !ok {
+			i = len(groups)
+			index[key] = i
+			groups = append(groups, MeasureGroup{Dims: dq.dimsOf(values), Series: []MeasurePoint{}})
+			totals = append(totals, measureAgg{})
+		}
+		totals[i].merge(a)
+		groups[i].Series = append(groups[i].Series, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("storage: measure groups: %w", err)
+	}
+	for i := range groups {
+		groups[i].MeasureStats = totals[i].stats()
+	}
+	sort.SliceStable(groups, func(i, j int) bool { return groups[i].Count > groups[j].Count })
+	if len(groups) > limit {
+		groups = groups[:limit]
+	}
+	if groups == nil {
+		groups = []MeasureGroup{}
+	}
+	return groups, nil
+}
+
+// merge adds b's histogram to a: counts and buckets sum, min and max widen.
+func (a *measureAgg) merge(b measureAgg) {
+	a.count += b.count
+	a.points += b.points
+	if b.sum != nil {
+		s := *b.sum
+		if a.sum != nil {
+			s += *a.sum
+		}
+		a.sum = &s
+	}
+	if b.min != nil && (a.min == nil || *b.min < *a.min) {
+		m := *b.min
+		a.min = &m
+	}
+	if b.max != nil && (a.max == nil || *b.max > *a.max) {
+		m := *b.max
+		a.max = &m
+	}
+	for i := range a.buckets {
+		a.buckets[i] += b.buckets[i]
+	}
 }

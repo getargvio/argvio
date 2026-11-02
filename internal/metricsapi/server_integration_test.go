@@ -723,6 +723,71 @@ func TestMetricsAPI_EndToEnd_Live(t *testing.T) {
 		}
 	})
 
+	t.Run("counter detail groups and filters by dimension", func(t *testing.T) {
+		at := now.Add(-2 * time.Hour)
+		var points []storage.MetricRow
+		add := func(label string, v float64) {
+			points = append(points, storage.MetricRow{
+				Time: at, TenantID: tenantID, MetricName: "cli.counter", MetricType: "sum", Value: &v,
+				CommandName: strp("scan"), ConsentTier: "anonymous",
+				DatapointAttributes: storage.Attrs{"cli.counter.name": "vulns.found", "cli.counter.label": label},
+			})
+		}
+		add("check=bola;severity=high", 5)
+		add("check=jwt;severity=high", 2)
+		add("check=jwt;severity=low", 3)
+		if _, err := w.InsertMetrics(ctx, points); err != nil {
+			t.Fatalf("insert counters: %v", err)
+		}
+		for _, cagg := range []string{"cagg_counters_hourly", "cagg_counters_daily"} {
+			if _, err := pool.Exec(ctx, `CALL refresh_continuous_aggregate($1, NULL, NULL)`, cagg); err != nil {
+				t.Fatalf("refresh %s: %v", cagg, err)
+			}
+		}
+		query := "/v1/metrics/counters?from=" + url.QueryEscape(fromParam) + "&name=vulns.found&bucket=day"
+
+		resp := get(t, query+"&group_by=severity&where=check:jwt,check:bola")
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200", resp.StatusCode)
+		}
+		var detail struct {
+			Data storage.CounterDetail `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		g := detail.Data.Groups
+		if len(g) != 2 || g[0].Dims["severity"] == nil || *g[0].Dims["severity"] != "high" || g[0].Total != 7 || g[1].Total != 3 {
+			t.Errorf("groups = %+v, want high 7 then low 3", g)
+		}
+
+		resp = get(t, query+"&where=severity:low")
+		defer resp.Body.Close()
+		detail.Data = storage.CounterDetail{}
+		if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(detail.Data.Series) != 1 || detail.Data.Series[0].Total != 3 || detail.Data.Groups != nil {
+			t.Errorf("where=severity:low = %+v, want 3 and no groups", detail.Data)
+		}
+
+		base := "/v1/metrics/counters?from=" + url.QueryEscape(fromParam)
+		for _, bad := range []string{
+			base + "&group_by=severity",
+			query + "&where=severity",
+			query + "&group_by=a,b,c",
+			query + "&group_by=Severity",
+			query + "&where=check:a%3Db",
+		} {
+			resp = get(t, bad)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Errorf("%s: status = %d, want 400", bad, resp.StatusCode)
+			}
+		}
+	})
+
 	t.Run("measures list and series, tenant scoped", func(t *testing.T) {
 		at := now.Add(-2 * time.Hour)
 		var points []storage.MetricRow

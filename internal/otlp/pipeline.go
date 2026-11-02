@@ -39,6 +39,10 @@ type recordOutcome struct {
 	decision consent.Decision
 	rejected bool
 	reason   string
+	// structDropped are the keys Layer 1 dropped (too long, unsupported
+	// value type) before allowlist evaluation, which decision.DroppedKeys
+	// doesn't list.
+	structDropped []string
 }
 
 // resolveAndEvaluate runs the full per-record pipeline shared by all three
@@ -75,7 +79,7 @@ func (p *Pipeline) resolveAndEvaluate(
 		p.Log.Info("otlp: attributes stripped by consent-tier enforcement",
 			"tenant_id", p.Tenant.Tenant.ID, "dropped_keys", decision.DroppedKeys)
 	}
-	return recordOutcome{decision: decision}
+	return recordOutcome{decision: decision, structDropped: append(resourceDropped, recordDropped...)}
 }
 
 func (p *Pipeline) logDropped(resourceDropped, recordDropped []string) {
