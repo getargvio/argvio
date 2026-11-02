@@ -451,6 +451,25 @@ func TestCORS(t *testing.T) {
 		}
 	})
 
+	t.Run("PUT is allowed cross-origin on the dashboard layout only", func(t *testing.T) {
+		putPreflight := func(path string) *httptest.ResponseRecorder {
+			return do(enabled, "OPTIONS", path, "", map[string]string{
+				"Origin":                         uiOrigin,
+				"Access-Control-Request-Method":  "PUT",
+				"Access-Control-Request-Headers": "authorization,content-type",
+			})
+		}
+		rec := putPreflight("/v1/dashboard/cards/vulnapi")
+		if rec.Code != 204 || !strings.Contains(rec.Header().Get("Access-Control-Allow-Methods"), "PUT") {
+			t.Errorf("layout preflight = %d, Allow-Methods %q, want PUT allowed", rec.Code, rec.Header().Get("Access-Control-Allow-Methods"))
+		}
+		for _, path := range []string{"/v1/metric-definitions/vulnapi", "/v1/tenants"} {
+			if rec := putPreflight(path); rec.Header().Get("Access-Control-Allow-Origin") != "" {
+				t.Errorf("%s: PUT must not be allowed cross-origin", path)
+			}
+		}
+	})
+
 	t.Run("no CORS headers for another origin", func(t *testing.T) {
 		for _, origin := range []string{"https://evil.example.com", "http://dashboard.example.com", "https://dashboard.example.com:8443", "https://sub.dashboard.example.com"} {
 			rec := preflight(enabled, origin)

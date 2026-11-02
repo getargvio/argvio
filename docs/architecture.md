@@ -205,7 +205,7 @@ about the token, so it is never a 401. Tokens are never logged; only `iss`,
 **Browser access.** The dashboard is a SPA on another origin, so
 `metrics.cors.allowed_origins` (empty = off) enables CORS for exact origins,
 registered ahead of authentication so the token-less preflight succeeds.
-No wildcards, no credentials, GET only.
+No wildcards, no credentials, GET only, except PUT on `/v1/dashboard/cards/{service}`, the layout the Product view saves.
 
 `public` runs the same verifier, but only accepts what `auth.methods` lists,
 which by default is `api_key` and `jwt`; OIDC there is opt-in, and ingest has

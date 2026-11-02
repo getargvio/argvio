@@ -1106,6 +1106,78 @@ func TestMetricsAPI_OIDC_Live(t *testing.T) {
 	solo := idp.Sign(t, idp.Claims("solo"))
 	both := idp.Sign(t, idp.Claims("both"))
 
+	t.Run("the dashboard layout: default from the catalog, saved by an admin", func(t *testing.T) {
+		owner := idp.Sign(t, idp.Claims("owner"))
+		send := func(method, path, token, body string) (int, string) {
+			req, _ := http.NewRequest(method, ts.URL+path, strings.NewReader(body))
+			req.Header.Set("Authorization", "Bearer "+token)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			b, _ := io.ReadAll(resp.Body)
+			return resp.StatusCode, string(b)
+		}
+		catalogFile := "version: 1\nservice: layout-cli\nmetrics:\n  - {name: vulns.found, kind: counter, title: V}\n  - {name: scan.findings, kind: value, title: F}\n"
+		if code, body := send("PUT", "/v1/metric-definitions/layout-cli", owner, catalogFile); code != http.StatusOK {
+			t.Fatalf("catalog = %d %s", code, body)
+		}
+		type layout struct {
+			Data struct {
+				Saved bool `json:"saved"`
+				Cards []struct {
+					Metric, CardType, Kind, Status string
+				} `json:"cards"`
+			} `json:"data"`
+		}
+		read := func() layout {
+			code, body := send("GET", "/v1/dashboard/cards?service=layout-cli", solo, "")
+			if code != http.StatusOK {
+				t.Fatalf("GET = %d %s", code, body)
+			}
+			var l layout
+			_ = json.Unmarshal([]byte(strings.ReplaceAll(body, "card_type", "CardType")), &l)
+			return l
+		}
+		if l := read(); l.Data.Saved || len(l.Data.Cards) != 4 || l.Data.Cards[0].Metric != "scan.findings" || l.Data.Cards[1].CardType != "distribution" {
+			t.Errorf("default layout = %+v, want kpi+distribution for the value, kpi+trend for the counter", l.Data)
+		}
+		valid := `{"cards":[{"metric":"vulns.found","card_type":"breakdown","options":{"dim":"severity"}},{"metric":"scan.findings","card_type":"kpi"}]}`
+		if code, _ := send("PUT", "/v1/dashboard/cards/layout-cli", solo, valid); code != http.StatusForbidden {
+			t.Errorf("viewer PUT = %d, want 403", code)
+		}
+		for _, bad := range []string{
+			`{"cards":[{"metric":"nope","card_type":"kpi"}]}`,
+			`{"cards":[{"metric":"vulns.found","card_type":"distribution"}]}`,
+			`{"cards":[{"metric":"vulns.found","card_type":"kpi","options":[1]}]}`,
+			`{}`,
+		} {
+			if code, _ := send("PUT", "/v1/dashboard/cards/layout-cli", owner, bad); code != http.StatusBadRequest {
+				t.Errorf("%s = %d, want 400", bad, code)
+			}
+		}
+		if code, body := send("PUT", "/v1/dashboard/cards/layout-cli", owner, valid); code != http.StatusNoContent {
+			t.Fatalf("admin PUT = %d %s", code, body)
+		}
+		if l := read(); !l.Data.Saved || len(l.Data.Cards) != 2 || l.Data.Cards[0].CardType != "breakdown" || l.Data.Cards[0].Status != "ok" {
+			t.Errorf("saved layout = %+v", l.Data)
+		}
+		// The value leaves the catalog: its card stays, flagged.
+		if code, _ := send("PUT", "/v1/metric-definitions/layout-cli", owner, "version: 1\nservice: layout-cli\nmetrics:\n  - {name: vulns.found, kind: counter, title: V}\n"); code != http.StatusOK {
+			t.Fatal("catalog update failed")
+		}
+		if l := read(); len(l.Data.Cards) != 2 || l.Data.Cards[1].Status != "deprecated" {
+			t.Errorf("after removal = %+v, want scan.findings flagged deprecated", l.Data)
+		}
+		if code, _ := send("PUT", "/v1/dashboard/cards/layout-cli", owner, `{"cards":[]}`); code != http.StatusNoContent {
+			t.Error("clearing the layout failed")
+		}
+		if l := read(); l.Data.Saved {
+			t.Error("an empty layout goes back to the default")
+		}
+	})
+
 	t.Run("only an admin member may replace a metric catalog", func(t *testing.T) {
 		put := func(token string) int {
 			req, _ := http.NewRequest("PUT", ts.URL+"/v1/metric-definitions/vulnapi",
