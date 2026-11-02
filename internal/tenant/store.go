@@ -42,6 +42,8 @@ SELECT
     tc.tier_ceiling, tc.tier_enforcement_mode,
     tc.rate_limit_requests_per_sec, tc.rate_limit_bytes_per_sec, tc.rate_limit_burst,
     tc.retention_traces_days, tc.retention_logs_days, tc.retention_metrics_days,
+    tc.max_counter_names, tc.max_counter_labels_per_name, tc.max_measure_names,
+    tc.max_measure_labels_per_name, tc.max_metric_dims, tc.max_dim_values_per_key,
     k.id, k.key_hash, k.key_prefix, k.scope, k.created_at, k.revoked_at, k.last_used_at
 FROM api_keys k
 JOIN tenants t ON t.id = k.tenant_id
@@ -55,6 +57,8 @@ WHERE k.key_hash = $1 AND k.scope = $2 AND k.revoked_at IS NULL`
 		&r.Config.TierCeiling, &r.Config.TierEnforcementMode,
 		&r.Config.RateLimitRequestsPerSec, &r.Config.RateLimitBytesPerSec, &r.Config.RateLimitBurst,
 		&r.Config.RetentionTracesDays, &r.Config.RetentionLogsDays, &r.Config.RetentionMetricsDays,
+		&r.Config.MetricCaps.MaxCounterNames, &r.Config.MetricCaps.MaxCounterLabelsPerName, &r.Config.MetricCaps.MaxMeasureNames,
+		&r.Config.MetricCaps.MaxMeasureLabelsPerName, &r.Config.MetricCaps.MaxMetricDims, &r.Config.MetricCaps.MaxDimValuesPerKey,
 		&r.APIKey.ID, &r.APIKey.KeyHash, &r.APIKey.KeyPrefix, &r.APIKey.Scope,
 		&r.APIKey.CreatedAt, &r.APIKey.RevokedAt, &r.APIKey.LastUsedAt,
 	)
@@ -76,7 +80,9 @@ SELECT
     t.id, t.slug, t.name, t.status,
     tc.tier_ceiling, tc.tier_enforcement_mode,
     tc.rate_limit_requests_per_sec, tc.rate_limit_bytes_per_sec, tc.rate_limit_burst,
-    tc.retention_traces_days, tc.retention_logs_days, tc.retention_metrics_days
+    tc.retention_traces_days, tc.retention_logs_days, tc.retention_metrics_days,
+    tc.max_counter_names, tc.max_counter_labels_per_name, tc.max_measure_names,
+    tc.max_measure_labels_per_name, tc.max_metric_dims, tc.max_dim_values_per_key
 FROM tenants t
 JOIN tenant_config tc ON tc.tenant_id = t.id
 WHERE t.id = $1`
@@ -88,6 +94,8 @@ WHERE t.id = $1`
 		&r.Config.TierCeiling, &r.Config.TierEnforcementMode,
 		&r.Config.RateLimitRequestsPerSec, &r.Config.RateLimitBytesPerSec, &r.Config.RateLimitBurst,
 		&r.Config.RetentionTracesDays, &r.Config.RetentionLogsDays, &r.Config.RetentionMetricsDays,
+		&r.Config.MetricCaps.MaxCounterNames, &r.Config.MetricCaps.MaxCounterLabelsPerName, &r.Config.MetricCaps.MaxMeasureNames,
+		&r.Config.MetricCaps.MaxMeasureLabelsPerName, &r.Config.MetricCaps.MaxMetricDims, &r.Config.MetricCaps.MaxDimValuesPerKey,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -151,8 +159,10 @@ func (s *Store) UpsertConfig(ctx context.Context, cfg Config) error {
 INSERT INTO tenant_config (
     tenant_id, tier_ceiling, tier_enforcement_mode,
     rate_limit_requests_per_sec, rate_limit_bytes_per_sec, rate_limit_burst,
-    retention_traces_days, retention_logs_days, retention_metrics_days, updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+    retention_traces_days, retention_logs_days, retention_metrics_days,
+    max_counter_names, max_counter_labels_per_name, max_measure_names,
+    max_measure_labels_per_name, max_metric_dims, max_dim_values_per_key, updated_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now())
 ON CONFLICT (tenant_id) DO UPDATE SET
     tier_ceiling = EXCLUDED.tier_ceiling,
     tier_enforcement_mode = EXCLUDED.tier_enforcement_mode,
@@ -162,10 +172,18 @@ ON CONFLICT (tenant_id) DO UPDATE SET
     retention_traces_days = EXCLUDED.retention_traces_days,
     retention_logs_days = EXCLUDED.retention_logs_days,
     retention_metrics_days = EXCLUDED.retention_metrics_days,
+    max_counter_names = EXCLUDED.max_counter_names,
+    max_counter_labels_per_name = EXCLUDED.max_counter_labels_per_name,
+    max_measure_names = EXCLUDED.max_measure_names,
+    max_measure_labels_per_name = EXCLUDED.max_measure_labels_per_name,
+    max_metric_dims = EXCLUDED.max_metric_dims,
+    max_dim_values_per_key = EXCLUDED.max_dim_values_per_key,
     updated_at = now()`,
 		cfg.TenantID, cfg.TierCeiling, cfg.TierEnforcementMode,
 		cfg.RateLimitRequestsPerSec, cfg.RateLimitBytesPerSec, cfg.RateLimitBurst,
 		cfg.RetentionTracesDays, cfg.RetentionLogsDays, cfg.RetentionMetricsDays,
+		cfg.MetricCaps.MaxCounterNames, cfg.MetricCaps.MaxCounterLabelsPerName, cfg.MetricCaps.MaxMeasureNames,
+		cfg.MetricCaps.MaxMeasureLabelsPerName, cfg.MetricCaps.MaxMetricDims, cfg.MetricCaps.MaxDimValuesPerKey,
 	)
 	if err != nil {
 		return fmt.Errorf("tenant: upsert config: %w", err)

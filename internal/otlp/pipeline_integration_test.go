@@ -2,6 +2,7 @@ package otlp
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"math"
 	"os"
@@ -787,6 +788,45 @@ FROM metrics WHERE tenant_id = $1 AND metric_name = 'cli.counter'`, tenantID)
 	var foldedDims int64
 	if err := pool.QueryRow(ctx, `SELECT folded_dim_values FROM counter_overflow WHERE tenant_id = $1`, tenantID).Scan(&foldedDims); err != nil || foldedDims != 1 {
 		t.Errorf("folded_dim_values = %d (err %v), want 1", foldedDims, err)
+	}
+}
+
+// A tenant's cap overrides (tenant_config) beat the public server's config.
+func TestProcessMetrics_TenantCapOverrides_Live(t *testing.T) {
+	pipeline, pool, tenantID := setupPipeline(t, "basic", consent.ModeStrip)
+	one, two := 1, 2
+	pipeline.Tenant.Config.MetricCaps = tenant.MetricCaps{MaxCounterNames: &one, MaxMetricDims: &two}
+	ctx := context.Background()
+
+	md := pmetric.NewMetrics()
+	rm := md.ResourceMetrics().AppendEmpty()
+	rm.Resource().Attributes().PutStr("cli.analytics.tier", "anonymous")
+	m := rm.ScopeMetrics().AppendEmpty().Metrics().AppendEmpty()
+	m.SetName("cli.counter")
+	m.SetUnit("1")
+	m.SetEmptySum().SetIsMonotonic(true)
+	m.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityDelta)
+	add := func(name string, dims ...string) {
+		dp := m.Sum().DataPoints().AppendEmpty()
+		dp.SetTimestamp(pcommon.NewTimestampFromTime(time.Now()))
+		dp.SetIntValue(1)
+		dp.Attributes().PutStr("cli.counter.name", name)
+		for i, v := range dims {
+			dp.Attributes().PutStr(fmt.Sprintf("cli.dim.k%d", i), v)
+		}
+	}
+	add("first", "a", "b")
+	add("first", "a", "b")
+	add("second")               // past the tenant's one name: folds
+	add("first", "a", "b", "c") // three dims: the tenant allows two, the global three
+
+	accepted, rejected, sample, err := pipeline.ProcessMetrics(ctx, md)
+	if err != nil || accepted != 3 || rejected != 1 {
+		t.Fatalf("ProcessMetrics: accepted=%d rejected=%d sample=%q err=%v, want 3/1", accepted, rejected, sample, err)
+	}
+	var folded int64
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM metrics WHERE tenant_id = $1 AND datapoint_attributes ->> 'cli.counter.name' = 'other'`, tenantID).Scan(&folded); err != nil || folded != 1 {
+		t.Errorf("folded names = %d (err %v), want 1", folded, err)
 	}
 }
 

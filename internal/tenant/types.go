@@ -45,6 +45,21 @@ type Config struct {
 	RetentionTracesDays  *int
 	RetentionLogsDays    *int
 	RetentionMetricsDays *int
+
+	// Vendor-metric caps; nil means "use the public server's global
+	// value" (public.max_counter_names_per_tenant and so on).
+	MetricCaps MetricCaps
+}
+
+// MetricCaps are a tenant's overrides of the vendor-metric caps. Each nil
+// field falls back to the matching public.* config key.
+type MetricCaps struct {
+	MaxCounterNames         *int
+	MaxCounterLabelsPerName *int
+	MaxMeasureNames         *int
+	MaxMeasureLabelsPerName *int
+	MaxMetricDims           *int
+	MaxDimValuesPerKey      *int
 }
 
 // APIKey is a row from api_keys. RawKey is only ever populated at creation

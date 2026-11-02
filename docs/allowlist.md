@@ -320,6 +320,11 @@ At ingest (`internal/otlp/dims.go`), after allowlist filtering:
    `*_labels_per_name` caps bound the tuples per name. A tuple past it is
    stored as `other`, which reads as `other` for every dimension.
 
+Every vendor-metric cap (`max_counter_*`, `max_measure_*`, `max_metric_dims`,
+`max_dim_values_per_key`) can be overridden for one tenant with
+`argvio tenant config --max-...` (`tenant_config`, docs/configuration.md), so
+a project with many checks gets room without raising every tenant's limit.
+
 The rollups need no change: they already group by label. With `name=`,
 `/v1/metrics/counters` and `/v1/metrics/measures` take `group_by=<key>` (up
 to two keys) to add `groups`, each with its dimension values, window total
