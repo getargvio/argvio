@@ -95,7 +95,7 @@ type MeasureList struct {
 // f.Time, most recorded first, off the daily rollup, with the tenant's fold
 // counts.
 func (q *QueryBuilder) Measures(ctx context.Context, scope TenantScope, f Filters) (MeasureList, error) {
-	pb := commandStatsPredicates(scope, f)
+	pb := vendorPredicates(scope, f)
 	limitPh := pb.nextPlaceholder(clampLimit(f.Limit))
 	offsetPh := pb.nextPlaceholder(f.Offset)
 
@@ -173,7 +173,7 @@ func (q *QueryBuilder) MeasureSeries(ctx context.Context, scope TenantScope, f F
 	}
 	out := MeasureDetail{Name: name, Series: []MeasurePoint{}, Labels: []MeasureLabelStats{}}
 
-	pb := commandStatsPredicates(scope, f)
+	pb := vendorPredicates(scope, f)
 	pb.add("measure_name = $%d", name)
 	if label != nil {
 		pb.add("measure_label = $%d", *label)
@@ -206,7 +206,7 @@ LIMIT %s OFFSET %s`, bucketExpr, measureAggregates, table, pb.where(), limitPh, 
 		return MeasureDetail{}, fmt.Errorf("storage: measure series: %w", err)
 	}
 
-	pb = commandStatsPredicates(scope, f)
+	pb = vendorPredicates(scope, f)
 	pb.add("measure_name = $%d", name)
 	limitPh = pb.nextPlaceholder(clampLimit(f.Limit))
 	sql = fmt.Sprintf(`

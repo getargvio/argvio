@@ -152,7 +152,8 @@ func (s *Server) handleFeatureDiscovery(w http.ResponseWriter, r *http.Request) 
 // serveVendorInstrument serves /v1/metrics/counters and /v1/metrics/measures:
 // the tenant's vendor instruments with their statistics, or, with name=, one
 // instrument's time series (bucketed like the other endpoints, optionally
-// narrowed by label=) and its labels. Two response shapes, so it can't use
+// narrowed by label=) and its labels. service= (repeatable) narrows either to
+// some of the tenant's CLIs. Two response shapes, so it can't use
 // serveBucketed.
 func serveVendorInstrument[L, D any](
 	s *Server,
@@ -172,6 +173,7 @@ func serveVendorInstrument[L, D any](
 			return
 		}
 		q := r.URL.Query()
+		f.Services = multiParam(q, "service")
 		instrument := q.Get("name")
 		var label *string
 		if q.Has("label") {
@@ -208,6 +210,31 @@ func serveVendorInstrument[L, D any](
 		}
 		writeJSON(w, http.StatusOK, map[string]any{responseDataKey: out})
 	}
+}
+
+// handleVendorServices serves /v1/metrics/services: the CLIs (OTel
+// service.name) the tenant sent vendor counters or measures for. Not
+// time-bucketed, so it can't use serveBucketed.
+func (s *Server) handleVendorServices(w http.ResponseWriter, r *http.Request) {
+	scope, ok := scopeFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "missing tenant scope")
+		return
+	}
+	f, err := s.parseFilters(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	ctx, cancel := s.withQuery(r.Context())
+	defer cancel()
+	out, err := s.QB.VendorServices(ctx, scope, f)
+	if err != nil {
+		s.Log.Error("metricsapi: vendor services failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "query failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{responseDataKey: out})
 }
 
 // handleSessionLengths serves /v1/metrics/session-length. Sessions are built

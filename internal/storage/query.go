@@ -58,6 +58,11 @@ type Filters struct {
 	CommandNames []string
 	ExitCode     *int32
 	IsCI         *bool
+	// Services narrows vendor counters and measures to the CLIs whose OTel
+	// service.name is listed (a tenant may ship several CLIs). Only the
+	// vendor-metric queries read it; their handlers are the only ones that
+	// set it.
+	Services []string
 
 	// Attrs applies exact-match filters against the record-level JSONB
 	// attributes column (span_attributes/log_attributes/

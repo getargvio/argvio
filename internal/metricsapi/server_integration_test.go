@@ -651,6 +651,78 @@ func TestMetricsAPI_EndToEnd_Live(t *testing.T) {
 		}
 	})
 
+	t.Run("counters filter by service, and services lists the CLIs", func(t *testing.T) {
+		at := now.Add(-2 * time.Hour)
+		var points []storage.MetricRow
+		add := func(id uuid.UUID, service string, v float64) {
+			points = append(points, storage.MetricRow{
+				Time: at, TenantID: id, MetricName: "cli.counter", MetricType: "sum", Value: &v,
+				CommandName: strp("scan"), ConsentTier: "anonymous",
+				ResourceAttributes:  storage.Attrs{"service.name": service},
+				DatapointAttributes: storage.Attrs{"cli.counter.name": "per.cli"},
+			})
+		}
+		add(tenantID, "cli-a", 5)
+		add(tenantID, "cli-b", 7)
+		add(otherTenantID, "cli-hidden", 9)
+		if _, err := w.InsertMetrics(ctx, points); err != nil {
+			t.Fatalf("insert counters: %v", err)
+		}
+		for _, cagg := range []string{"cagg_counters_hourly", "cagg_counters_daily"} {
+			if _, err := pool.Exec(ctx, `CALL refresh_continuous_aggregate($1, NULL, NULL)`, cagg); err != nil {
+				t.Fatalf("refresh %s: %v", cagg, err)
+			}
+		}
+		from := "?from=" + url.QueryEscape(fromParam)
+		total := func(t *testing.T, query string) float64 {
+			t.Helper()
+			resp := get(t, "/v1/metrics/counters"+from+query)
+			defer resp.Body.Close()
+			var list struct {
+				Data storage.CounterList `json:"data"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			for _, c := range list.Data.Counters {
+				if c.Name == "per.cli" {
+					return c.Total
+				}
+			}
+			return 0
+		}
+		if got := total(t, ""); got != 12 {
+			t.Errorf("all CLIs: per.cli = %v, want 12", got)
+		}
+		if got := total(t, "&service=cli-b"); got != 7 {
+			t.Errorf("service=cli-b: per.cli = %v, want 7", got)
+		}
+		if got := total(t, "&service=cli-a,cli-b"); got != 12 {
+			t.Errorf("service=cli-a,cli-b: per.cli = %v, want 12", got)
+		}
+
+		resp := get(t, "/v1/metrics/services"+from)
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("services: status = %d, want 200", resp.StatusCode)
+		}
+		var services struct {
+			Data []storage.VendorService `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&services); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		names := map[string]bool{}
+		for _, s := range services.Data {
+			if s.Name != nil {
+				names[*s.Name] = true
+			}
+		}
+		if !names["cli-a"] || !names["cli-b"] || names["cli-hidden"] {
+			t.Errorf("services = %+v, want cli-a and cli-b, never another tenant's", services.Data)
+		}
+	})
+
 	t.Run("measures list and series, tenant scoped", func(t *testing.T) {
 		at := now.Add(-2 * time.Hour)
 		var points []storage.MetricRow
