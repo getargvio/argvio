@@ -134,3 +134,21 @@ func TestParseFiltersAttrRegex(t *testing.T) {
 		})
 	}
 }
+
+// group_by is accepted repeated or comma-separated, so
+// group_by=feature&group_by=plan works as the docs show.
+func TestParseDimQuery_RepeatedGroupBy(t *testing.T) {
+	for _, raw := range []string{"group_by=feature&group_by=plan", "group_by=feature,plan"} {
+		q, err := url.ParseQuery(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dq, err := parseDimQuery(q)
+		if err != nil {
+			t.Fatalf("%s: %v", raw, err)
+		}
+		if len(dq.GroupBy) != 2 || dq.GroupBy[0] != "feature" || dq.GroupBy[1] != "plan" {
+			t.Errorf("%s: GroupBy = %v, want [feature plan]", raw, dq.GroupBy)
+		}
+	}
+}

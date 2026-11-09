@@ -366,6 +366,50 @@ or statistics and series, and `where=<key>:<value>` (repeatable; values of a
 key are ORed, keys ANDed) to narrow the series, labels and groups. A point
 without the grouped key is in the group whose value is `null`.
 
+### Plan as a dimension (feature usage by plan)
+
+Argvio has no plan or entitlement model: a plan is **vendor data**. A CLI that
+wants "feature usage by plan" tags its feature counters with `cli.dim.plan`,
+next to a `cli.dim.feature`:
+
+```
+cli.counter.name = feature.used
+cli.dim.feature  = export
+cli.dim.plan     = pro
+```
+
+stored as the label `feature=export;plan=pro`. No schema or tenant-config
+change is needed; `cli.dim.*` already covers it.
+
+- **Coarse, fixed plan names only** (`free`, `pro`, `enterprise`), chosen in
+  the CLI's code. Never an account, organization or customer id, a seat count,
+  an email or anything else unique per customer: dimensions are accepted at
+  the `anonymous` consent tier, so the value is collected from every user
+  whatever they consented to.
+- A plan name is not personal data, but the plan of a single customer on a
+  bespoke plan can identify them. Use a generic name for those (`custom`).
+- Keep the plan **independent of the account**: an SDK reads it from its own
+  local state, and omits `cli.dim.plan` when it does not know it, rather than
+  sending `unknown` or a guess. A point without the key is grouped under `null`.
+
+Read it with `group_by` repeated or comma-separated:
+
+```
+GET /v1/metrics/counters?name=feature.used&group_by=feature&group_by=plan
+```
+
+Each group has `dims: {feature, plan}`, its `total` and its `series`; add
+`where=plan:pro` to narrow to one plan. Past `public.max_dim_values_per_key`
+distinct plans (default 50, so only a misbehaving SDK gets there) a new plan is
+stored as `other` inside the tuple: the feature breakdown stays exact and the
+extra plans read as `plan=other`, counted in `folded_dim_values`.
+`TestProcessMetrics_FeaturePlan_Live` covers this end to end.
+
+The SDKs (argvio-go, argvio-node) can attach it today by passing `cli.dim.plan`
+as a counter attribute. A typed helper (for instance one that sets the plan
+once per process, so every feature counter carries it) would be a convenience
+in those repositories, not a server change.
+
 ## Unknown commands (`cli.command.unknown`)
 
 > **Warning: a mistyped command is arbitrary user input.** It can be a typo of
