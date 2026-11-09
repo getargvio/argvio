@@ -1431,3 +1431,73 @@ func TestProcessLogs_UnknownCommand_Live(t *testing.T) {
 		t.Errorf("other event: body = %v, want it kept at full tier", body)
 	}
 }
+
+// A vendor tags feature counters with cli.dim.plan (docs/allowlist.md,
+// "Plan as a dimension"). Ingested and read back with group_by=feature and
+// group_by=plan, the breakdown is exact, and a plan past
+// max_dim_values_per_key folds into "other" while the feature stays exact.
+func TestProcessMetrics_FeaturePlan_Live(t *testing.T) {
+	pipeline, pool, tenantID := setupPipeline(t, "basic", consent.ModeStrip)
+	pipeline.Bounds.MaxMetricDims = 2
+	pipeline.Bounds.MaxDimValuesPerKey = 2
+	ctx := context.Background()
+	now := time.Now()
+
+	md := pmetric.NewMetrics()
+	rm := md.ResourceMetrics().AppendEmpty()
+	rm.Resource().Attributes().PutStr("cli.analytics.tier", "anonymous")
+	m := rm.ScopeMetrics().AppendEmpty().Metrics().AppendEmpty()
+	m.SetName("cli.counter")
+	m.SetUnit("1")
+	m.SetEmptySum().SetIsMonotonic(true)
+	m.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityDelta)
+	add := func(feature, plan string, n int64) {
+		dp := m.Sum().DataPoints().AppendEmpty()
+		dp.SetTimestamp(pcommon.NewTimestampFromTime(now))
+		dp.SetIntValue(n)
+		dp.Attributes().PutStr("cli.counter.name", "feature.used")
+		dp.Attributes().PutStr("cli.dim.feature", feature)
+		dp.Attributes().PutStr("cli.dim.plan", plan)
+	}
+	add("export", "pro", 5)
+	add("export", "pro", 1)
+	add("export", "free", 2)
+	add("export", "free", 2)
+	add("sync", "pro", 2)
+	// A third, rarer plan: past the cap of two it folds, the feature stays exact.
+	add("export", "enterprise", 3)
+
+	accepted, rejected, sample, err := pipeline.ProcessMetrics(ctx, md)
+	if err != nil || accepted != 6 || rejected != 0 {
+		t.Fatalf("ProcessMetrics: accepted=%d rejected=%d sample=%q err=%v, want 6/0", accepted, rejected, sample, err)
+	}
+	for _, cagg := range []string{"cagg_counters_hourly", "cagg_counters_daily"} {
+		if _, err := pool.Exec(ctx, `CALL refresh_continuous_aggregate($1, NULL, NULL)`, cagg); err != nil {
+			t.Fatalf("refresh %s: %v", cagg, err)
+		}
+	}
+
+	scope, _ := storage.NewTenantScope(tenantID)
+	f := storage.Filters{Time: storage.TimeRange{From: now.Add(-24 * time.Hour), To: now.Add(time.Hour)}}
+	d, err := storage.NewQueryBuilder(pool).CounterSeries(ctx, scope, f, "feature.used", nil,
+		storage.DimQuery{GroupBy: []string{"feature", "plan"}}, storage.BucketDay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]float64{}
+	for _, g := range d.Groups {
+		if g.Dims["feature"] == nil || g.Dims["plan"] == nil {
+			t.Fatalf("group %+v is missing a dimension", g)
+		}
+		got[*g.Dims["feature"]+"/"+*g.Dims["plan"]] = g.Total
+	}
+	want := map[string]float64{"export/pro": 6, "export/free": 4, "export/other": 3, "sync/pro": 2}
+	if len(got) != len(want) {
+		t.Fatalf("groups = %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %v, want %v", k, got[k], v)
+		}
+	}
+}
